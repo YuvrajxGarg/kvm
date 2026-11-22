@@ -38,7 +38,9 @@ from ..screens import Screens, beyond, landing
 # Going home from the other computer needs a deliberate push: a mouse settles with a pixel or
 # two of drift, and right after crossing that drift used to send the pointer straight back.
 EXIT_GRACE = 0.25   # seconds after entering when the edge home is closed
-EXIT_PUSH = 8.0     # how far past the edge the pointer has to be pushed
+EXIT_PUSH = 8.0
+QUIET_AFTER = 0.6   # seconds after the pointer leaves for (or lands from) another computer with no crossing
+QUIET_INSET = 6.0   # how far inside the edge the pointer waits after leaving through it     # how far past the edge the pointer has to be pushed
 GAP = 48.0          # screens this close count as touching
 
 BUTTONS = (1, 2, 3, 4, 5)
@@ -81,6 +83,7 @@ class Backend(object):
         self.home = []               # being driven: the driver's screens
         self.entered = 0.0
         self.push = 0.0
+        self.quiet_until = 0.0       # no crossing from here until then (the pointer just came home)
         self.held_local = set()      # keys physically down here (for hold-to-cross, hotkeys)
         self.buttons_local = set()
         self.held_inj = set()        # keys we injected and haven't released
@@ -225,7 +228,7 @@ class Backend(object):
     def on_local_move(self, x, y, dx, dy):
         """Pointer moved here while not grabbed. Returns True to swallow the event."""
         if self.grabbed or not (self.watch_sides or self.targets) or self.locked or self.buttons_local \
-                or not self.share_out:
+                or not self.share_out or time.time() < self.quiet_until:
             self.edge_hits = {}
             self.edge_push = 0.0
             return False
@@ -352,6 +355,7 @@ class Backend(object):
         x, y = self.screens.clamp(float(x), float(y))
         self.pos = (x, y)
         self._warp(x, y)
+        self.quiet_until = time.time() + QUIET_AFTER
 
     def place(self, side, frac):
         """Put this computer's pointer on its `side` edge at `frac`, just inside."""
@@ -359,6 +363,7 @@ class Backend(object):
         x, y = self.screens.entry(side, frac, inset=2.0)
         self.pos = (x, y)
         self._warp(x, y)
+        self.quiet_until = time.time() + QUIET_AFTER
 
     # ---- being driven ----------------------------------------------------------
     def inject_move(self, dx, dy):
@@ -367,8 +372,13 @@ class Backend(object):
             cur = self.pos or (self.screens.left + 10, self.screens.top + 10)
         pt = None
         if self.home and not self.locked:
-            nx, ny, _, _ = self.screens.step(cur[0], cur[1], dx, dy, ())
-            out = None if self.screens.at(cur[0] + dx, cur[1] + dy) else self._way_home(cur, dx, dy)
+            moved = self._desk_step(cur, dx, dy)
+            if moved is not None:
+                nx, ny = moved
+                out = None if self._desk_has(cur, dx, dy) else self._way_home(cur, dx, dy)
+            else:
+                nx, ny, _, _ = self.screens.step(cur[0], cur[1], dx, dy, ())
+                out = None if self.screens.at(cur[0] + dx, cur[1] + dy) else self._way_home(cur, dx, dy)
             exit_side, frac = (out[0], 0.5) if out else (None, 0.0)
             if out:
                 pt, over = out[1], out[2]
@@ -384,6 +394,16 @@ class Backend(object):
             if self.push >= EXIT_PUSH:
                 self.release()
                 self.exits, self.map, self.home, self.push = [], [], [], 0.0
+                # Leave our pointer a little inside the edge it went out of, and don't let it cross
+                # from here by itself for a moment: sitting on that edge, stray events would carry
+                # it straight back out (taking over the computer it just went home to).
+                bx, by = self.screens.clamp(nx, ny)
+                bx -= {"right": QUIET_INSET, "left": -QUIET_INSET}.get(exit_side, 0)
+                by -= {"bottom": QUIET_INSET, "top": -QUIET_INSET}.get(exit_side, 0)
+                bx, by = self.screens.clamp(bx, by)
+                self.pos = (bx, by)
+                self._post_move(bx, by, set())
+                self.quiet_until = time.time() + QUIET_AFTER
                 ev = {"t": "exit", "side": exit_side, "frac": frac}
                 if pt:
                     ev["pt"] = pt
@@ -393,6 +413,50 @@ class Backend(object):
             self.push = 0.0
         self.pos = (nx, ny)
         self._post_move(nx, ny, set(self.buttons_inj))
+
+    def _map_item(self, r):
+        for it in self.map:
+            q = it.get("r") or []
+            if len(q) >= 4 and len(it.get("at") or []) >= 2 and all(abs(float(q[i]) - r[i]) < 1.5 for i in range(4)):
+                return it
+        return None
+
+    def _desk_point(self, cur, dx, dy):
+        """Where this move lands on the driver's desk (its coordinates), or None without a layout."""
+        r = self.screens.at(cur[0], cur[1]) or self.screens.nearest(cur[0], cur[1])
+        item = self._map_item(r)
+        if item is None:
+            return None
+        return cur[0] + dx + item["at"][0] - r[0], cur[1] + dy + item["at"][1] - r[1]
+
+    def _desk_has(self, cur, dx, dy):
+        """True when the move lands on one of our own screens as they sit on the driver's desk."""
+        q = self._desk_point(cur, dx, dy)
+        if q is None:
+            return False
+        for it in self.map:
+            a, rr = it.get("at") or [], it.get("r") or []
+            if len(a) >= 2 and len(rr) >= 4 and a[0] <= q[0] < a[0] + rr[2] and a[1] <= q[1] < a[1] + rr[3]:
+                return True
+        return False
+
+    def _desk_step(self, cur, dx, dy):
+        """Being driven with a layout: move between our own screens the way they sit on the
+        driver's desk, not the way this computer's display settings arrange them (a laptop that
+        Windows puts below the monitor must not catch a pointer heading for the Mac below it).
+        Returns our new (x, y), or None when there's no layout for the screen the pointer is on."""
+        q = self._desk_point(cur, dx, dy)
+        if q is None:
+            return None
+        for it in self.map:
+            a, rr = it.get("at") or [], it.get("r") or []
+            if len(a) >= 2 and len(rr) >= 4 and a[0] <= q[0] < a[0] + rr[2] and a[1] <= q[1] < a[1] + rr[3]:
+                x, y = q[0] - a[0] + rr[0], q[1] - a[1] + rr[1]
+                if self.screens.at(x, y):
+                    return x, y
+        # Off every screen on the desk: stop at the edge of the one the pointer is on.
+        r = self.screens.at(cur[0], cur[1]) or self.screens.nearest(cur[0], cur[1])
+        return min(max(cur[0] + dx, r[0]), r[0] + r[2] - 1), min(max(cur[1] + dy, r[1]), r[1] + r[3] - 1)
 
     def _way_home(self, cur, dx, dy):
         """Being driven with a layout: does this move leave our screens onto one of the driver's?

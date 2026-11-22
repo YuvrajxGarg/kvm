@@ -167,6 +167,7 @@ class WinBackend(Backend):
         self._desk_name = None
         self._desk_checked = 0.0
         self._park = None
+        self._unpark = None
         self._last = None
         self._hidden = False
         self._wheel_acc = [0.0, 0.0]
@@ -289,12 +290,18 @@ class WinBackend(Backend):
             for rr in self.screens.rects:
                 if rr[0] == 0 and rr[1] == 0:
                     r = rr
+            self._unpark = self._cursor()
             self._park = (int(r[0] + r[2] / 2), int(r[1] + r[3] / 2))
             user32.SetCursorPos(*self._park)
             hide_cursors()
         else:
+            # Back where it left from, not stranded in the middle of the main screen (a crossing
+            # that didn't go through; a normal return home places it again right after).
+            if self._park and self._unpark:
+                user32.SetCursorPos(int(self._unpark[0]), int(self._unpark[1]))
             restore_cursors()
             self._park = None
+            self._unpark = None
             self._last = None
 
     # ---- geometry ------------------------------------------------------------------

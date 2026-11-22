@@ -603,9 +603,16 @@ def mac_permissions(tap_ok=None):
         out["accessibility"] = bool(AXIsProcessTrusted())
     except Exception:
         pass
-    if tap_ok:
-        # The event tap only opens with both allowed; the preflight calls can lag behind Settings.
-        out["input_monitoring"] = out["accessibility"] = True
+    # An event tap opens with Accessibility alone, but then gets only the mouse: keys need Input
+    # Monitoring too. So the open tap proves nothing about the keyboard; trust the preflight.
+    if tap_ok and out.get("accessibility") is False:
+        out["accessibility"] = True
+    try:
+        hit = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/Carbon.framework/Frameworks/HIToolbox.framework/HIToolbox")
+        hit.IsSecureEventInputEnabled.restype = ctypes.c_bool
+        out["secure_input"] = bool(hit.IsSecureEventInputEnabled())
+    except Exception:
+        out["secure_input"] = None
     if out.get("input_monitoring") is False:
         out["needs"].append("input_monitoring")
     if out.get("accessibility") is False:
