@@ -29,7 +29,7 @@ excludes = ["tkinter", "_tkinter", "matplotlib", "scipy"]
 if sys.platform == "darwin":
     # The Mac's own sound (what it plays) comes from a small ScreenCaptureKit tool built by build_mac.sh.
     # The extra display for "Extend this Mac" comes from kvm-vdisplay.
-    for tool in ("kvm-audiotap", "kvm-vdisplay"):
+    for tool in ("kvm-audiotap", "kvm-vdisplay", "kvm-camera"):
         path = os.path.join(root, "native-build", tool)
         if os.path.exists(path):
             binaries.append((path, "."))
@@ -72,6 +72,7 @@ if sys.platform == "darwin":
             "NSLocalNetworkUsageDescription": "Kvm finds and connects to your other computers on this network.",
             "NSBonjourServices": ["_pxlkvm._tcp"],
             # Sending this Mac's microphone to the other computer.
+            "NSCameraUsageDescription": "Kvm sends this Mac's camera to your other computer when you turn it on.",
             "NSMicrophoneUsageDescription": "Kvm sends your microphone to your other computer when you turn it on.",
             "NSScreenCaptureUsageDescription": "Kvm shows this screen and plays its sound on your other computer when you share it.",
         },

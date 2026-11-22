@@ -57,6 +57,7 @@ def _selftest(out):
         from .audio import native_tool, tap_path
         res["audiotap"] = bool(tap_path())
         res["vdisplay_tool"] = bool(native_tool("kvm-vdisplay"))
+        res["camera_tool"] = bool(native_tool("kvm-camera"))
     tmp = tempfile.mkdtemp()
     try:
         res["loopback"] = _loopback(tmp)

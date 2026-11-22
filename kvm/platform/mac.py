@@ -67,6 +67,7 @@ class MacBackend(Backend):
     can_capture = True
     can_inject = True
     can_vdisplay = True  # CGVirtualDisplay, through kvm-vdisplay
+    can_camera = True    # AVFoundation, through kvm-camera
 
     def __init__(self):
         self._tap = None
@@ -509,6 +510,57 @@ class MacBackend(Backend):
                 self._vproc = None
                 self.sink({"t": "vdisplay", "on": False, "rect": None, "error": "The extra display went away."})
         threading.Thread(target=watch, daemon=True).start()
+
+
+    # ---- the camera, for another computer ----------------------------------------------
+    def camera(self, cmd):
+        threading.Thread(target=self._camera, args=(dict(cmd),), name="kvm-camera", daemon=True).start()
+
+    def _camera(self, cmd):
+        import base64
+        import struct
+
+        from PIL import Image
+
+        from ..audio import native_tool
+        old = getattr(self, "_camproc", None)
+        self._camproc = None
+        if old:
+            try:
+                old.stdin.close()
+                old.wait(3)
+            except Exception:
+                old.kill()
+        if not cmd.get("on"):
+            return
+        tool = native_tool("kvm-camera")
+        if not tool:
+            self.sink({"t": "camera", "on": False, "error": "This copy of Kvm can't use the camera (kvm-camera is missing)."})
+            return
+        proc = subprocess.Popen([tool, str(int(cmd.get("w") or 1280)), str(int(cmd.get("h") or 720)),
+                                 str(int(cmd.get("fps") or 30))],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self._camproc = proc
+        self.sink({"t": "camera", "on": True})
+        while self._camproc is proc:
+            head = proc.stdout.read(4)
+            if len(head) < 4:
+                break
+            n = struct.unpack(">I", head)[0]
+            data = proc.stdout.read(n)
+            if len(data) < n:
+                break
+            try:
+                w, h = Image.open(io.BytesIO(data)).size
+            except Exception:
+                continue
+            self.sink({"t": "camframe", "jpeg": base64.b64encode(data).decode("ascii"), "w": w, "h": h})
+        if self._camproc is proc:
+            self._camproc = None
+            err = (proc.stderr.read() or b"").decode("utf-8", "replace").strip()
+            if "permission" in err:
+                err = "Allow Kvm to use the camera in System Settings › Privacy & Security › Camera, then try again."
+            self.sink({"t": "camera", "on": False, "error": err or "The camera stopped."})
 
 
 def mac_permissions(tap_ok=None):
