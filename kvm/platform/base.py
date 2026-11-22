@@ -13,11 +13,13 @@ Events a backend sends:
   {"t": "exit", "side", "frac"}             (being driven) the pointer pushed past the edge home
   {"t": "clip", "kind": "text"|"png", "data"}   this computer's clipboard changed
   {"t": "screens", "rects"}                 the monitor layout changed
+  {"t": "frame", "jpeg", "w", "h", "seq", "cursor"}   (sharing the screen) a new picture of it
   {"t": "log", "text"}
 """
 
 import base64
 import hashlib
+import io
 import queue
 import threading
 import time
@@ -55,6 +57,8 @@ class Backend(object):
         self.clip_images = True
         self._clip_last = None
         self._lock = threading.RLock()
+        self._cap = None             # screen sharing settings while someone is watching
+        self._cap_gen = 0
 
     # ---- lifecycle -----------------------------------------------------------
     def start(self, sink):
@@ -133,6 +137,10 @@ class Backend(object):
             self.action(cmd.get("a"), cmd)
         elif c == "sas":
             self.sas()
+        elif c == "capture":
+            self.capture(cmd)
+        elif c == "abs":
+            self.inject_abs(cmd["x"], cmd["y"])
 
     # ---- driving: what the platform capture calls -----------------------------
     def on_local_move(self, x, y, dx, dy):
@@ -269,6 +277,73 @@ class Backend(object):
                 pass
         self.buttons_inj = set()
 
+    def inject_abs(self, fx, fy):
+        """Put the pointer at a point given as fractions of the whole desktop (from a screen viewer)."""
+        sc = self.screens
+        x = sc.left + max(0.0, min(1.0, float(fx))) * (sc.right - sc.left)
+        y = sc.top + max(0.0, min(1.0, float(fy))) * (sc.bottom - sc.top)
+        x, y = sc.clamp(x, y)
+        self.pos = (x, y)
+        self._post_move(x, y, set(self.buttons_inj))
+
+    # ---- screen sharing ------------------------------------------------------------
+    def capture(self, cmd):
+        """Start (or retune, or stop) sending pictures of this computer's screen."""
+        with self._lock:
+            self._cap_gen += 1
+            if not cmd.get("on"):
+                self._cap = None
+                return
+            self._cap = {"fps": max(1.0, min(30.0, float(cmd.get("fps") or 12))),
+                         "maxw": int(cmd.get("maxw") or 1600), "q": int(cmd.get("q") or 70)}
+            gen = self._cap_gen
+        threading.Thread(target=self._capture_loop, args=(gen,), name="kvm-capture", daemon=True).start()
+
+    def _capture_loop(self, gen):
+        seq, last, last_sent, fails = 0, None, 0.0, 0
+        self._capture_thread_init()
+        while True:
+            with self._lock:
+                if gen != self._cap_gen or not self._cap:
+                    return
+                cap = dict(self._cap)
+            t0 = time.time()
+            try:
+                img = self._grab_screen()
+                fails = 0
+            except Exception as e:
+                img = None
+                fails += 1
+                if fails in (1, 10, 100):
+                    self.sink({"t": "log", "text": "screen capture: %r" % e})
+            if img is not None:
+                cur = self._cursor_frac()
+                if cur:
+                    draw_pointer(img, cur[0] * img.size[0], cur[1] * img.size[1])
+                jpeg, w, h = encode_jpeg(img, cap["maxw"], cap["q"])
+                digest = hashlib.sha1(jpeg).digest()
+                # An unchanged screen is sent again now and then, so a viewer that joined late gets it.
+                if digest != last or t0 - last_sent > 2.0:
+                    last, last_sent = digest, t0
+                    seq += 1
+                    self.sink({"t": "frame", "jpeg": base64.b64encode(jpeg).decode("ascii"), "w": w, "h": h,
+                               "seq": seq, "cursor": cur})
+            time.sleep(max(0.005, 1.0 / cap["fps"] - (time.time() - t0)))
+
+    def _cursor_frac(self):
+        cur = self._cursor()
+        sc = self.screens
+        if cur is None or sc.right <= sc.left or sc.bottom <= sc.top:
+            return None
+        return [(cur[0] - sc.left) / (sc.right - sc.left), (cur[1] - sc.top) / (sc.bottom - sc.top)]
+
+    def _capture_thread_init(self):
+        pass
+
+    def _grab_screen(self):
+        """A PIL image of the whole desktop (every monitor), or None."""
+        return None
+
     # ---- clipboard ---------------------------------------------------------------
     def _check_clipboard(self):
         got = self._clip_get(self.clip_images)
@@ -338,6 +413,30 @@ class Backend(object):
         pass
 
 
+def draw_pointer(img, x, y):
+    """Screen pictures don't include the pointer, so draw one where it is (scaled for the picture)."""
+    from PIL import ImageDraw
+    k = max(1.0, img.size[0] / 2400.0) * 1.4
+    pts = [(0, 0), (0, 17), (4.5, 13), (7.5, 20), (10.5, 18.6), (7.6, 12), (13, 12)]
+    poly = [(x + px * k, y + py * k) for px, py in pts]
+    d = ImageDraw.Draw(img)
+    d.polygon(poly, fill=(255, 255, 255), outline=(0, 0, 0))
+
+
+def encode_jpeg(img, maxw, quality):
+    """PIL image -> (JPEG bytes, width, height), scaled down to at most maxw wide."""
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    w, h = img.size
+    if maxw and w > maxw:
+        h = max(1, int(round(h * maxw / float(w))))
+        w = maxw
+        img = img.resize((w, h), 2)  # bilinear: quick, and fine for a live view
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=quality)
+    return buf.getvalue(), w, h
+
+
 def _mod_set(name):
     return {"ctrl": keys.CTRL, "alt": keys.ALT, "shift": keys.SHIFT, "meta": keys.META}.get(name, set())
 
@@ -390,6 +489,13 @@ class FakeBackend(Backend):
 
     def sas(self):
         self.posted.append(("sas",))
+
+    def _grab_screen(self):
+        from PIL import Image
+        sc = self.screens
+        w, h = int(sc.right - sc.left), int(sc.bottom - sc.top)
+        x, y = self.cursor
+        return Image.new("RGB", (max(1, w), max(1, h)), (int(x) % 256, int(y) % 256, 90))
 
     def action(self, what, cmd):
         self.posted.append(("action", what))

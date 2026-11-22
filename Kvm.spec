@@ -13,7 +13,7 @@ datas += [
     (os.path.join(root, "kvm", "ui"), os.path.join("kvm", "ui")),
     (os.path.join(root, "VERSION"), "."),
 ]
-hiddenimports += ["certifi", "kvm.platform.base"]
+hiddenimports += ["certifi", "kvm.platform.base", "kvm.viewserver", "PIL.Image", "PIL.ImageDraw", "PIL.JpegImagePlugin"]
 for pkg in ("nacl", "spake2", "zeroconf"):
     d, b, h = collect_all(pkg)
     datas += d
@@ -25,7 +25,7 @@ elif sys.platform == "win32":
     hiddenimports += ["kvm.platform.win", "kvm.winservice", "kvm.control", "win32timezone", "servicemanager", "win32service",
                       "win32serviceutil", "win32event", "win32ts", "win32profile", "win32process", "win32security",
                       "win32pipe", "win32api", "win32con", "pywintypes"]
-excludes = ["tkinter", "_tkinter", "matplotlib", "scipy", "numpy", "PIL"]
+excludes = ["tkinter", "_tkinter", "matplotlib", "scipy", "numpy"]
 
 a = Analysis(
     [os.path.join(root, "Kvm.py")],

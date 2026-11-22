@@ -45,6 +45,7 @@ class Peer(object):
         self.id = pid
         self.main = None
         self.bulk = None
+        self.media = None                  # screen pictures (and later sound), so they never queue behind files
         self.version = None
         self.screens = None
         self.last_seen = 0.0
@@ -78,6 +79,9 @@ class Agent(object):
         self._stopped = False
         self._screens = []
         self._permissions = {}
+        self._views = {}                   # pid -> the other computer's screen we're watching
+        self._watchers = {}                # pid -> a computer watching our screen
+        self._view_server = None
 
     # ==== lifecycle ==============================================================
     def start(self):
@@ -97,7 +101,7 @@ class Agent(object):
         except Exception:
             pass
         with self._lock:
-            links = [l for p in self._peers.values() for l in (p.main, p.bulk) if l]
+            links = [l for p in self._peers.values() for l in (p.main, p.bulk, p.media) if l]
         for l in links:
             l.close()
         if self._server:
@@ -111,6 +115,8 @@ class Agent(object):
                 pass
         if self._disc:
             self._disc.stop()
+        if self._view_server:
+            self._view_server.stop()
 
     @property
     def port(self):
@@ -172,6 +178,9 @@ class Agent(object):
                 "notices": list(self._notices[-10:]), "permissions": self._backend.permissions(),
                 "backend": self._backend.name, "capture": self._backend.can_capture,
                 "discovery": bool(self._disc and self._disc.available),
+                "views": {pid: {k: v[k] for k in ("phase", "error", "w", "h", "seq", "control", "url")}
+                          for pid, v in self._views.items()},
+                "watchers": [{"id": pid, "name": self._peer_name(pid)} for pid in self._watchers],
             }
 
     def rename(self, name):
@@ -182,6 +191,8 @@ class Agent(object):
 
     def set_setting(self, key, value):
         self._store.set(key, value)
+        if key == "screen_share" and not value:
+            self.stop_sharing()
         self._configure_backend()
         return self._store.settings()
 
@@ -205,7 +216,7 @@ class Agent(object):
             p = self._peers.pop(pid, None)
             self._store.forget(pid)
         if p:
-            for l in (p.main, p.bulk):
+            for l in (p.main, p.bulk, p.media):
                 if l:
                     try:
                         l.msg({"t": "unpair"})
@@ -559,6 +570,180 @@ class Agent(object):
             if p and p.main and phase == "failed":
                 p.main.msg({"t": "files_cancel", "tid": tid})
 
+
+    # ==== the other computer's screen ===============================================
+    # The watcher asks ("view"); the computer being watched has its backend take pictures of
+    # its screen and sends each one over the "media" link. Only the newest picture is ever
+    # queued, so a slow network shows fewer frames, never old ones. Input from the viewer
+    # window arrives as "vin" and is put on the screen like any other.
+    def view_start(self, pid, fps=12, maxw=1600, quality=65):
+        """Start watching a paired computer's screen. Returns the local address of its picture stream."""
+        with self._lock:
+            p = self._peers.get(pid)
+            if not (p and p.main and not p.main.closed):
+                raise RuntimeError("%s isn't connected." % self._peer_name(pid))
+            if not self._view_server:
+                from .viewserver import ViewServer
+                self._view_server = ViewServer(self).start()
+            v = self._views.get(pid)
+            if not v:
+                v = self._views[pid] = {"phase": "asking", "error": None, "w": 0, "h": 0, "seq": 0, "control": False,
+                                        "jpeg": None, "cond": threading.Condition(), "since": time.time()}
+            v["url"] = self._view_server.url(pid)
+        p.main.msg({"t": "view", "on": True, "fps": fps, "maxw": maxw, "q": quality})
+        return v["url"]
+
+    def view_stop(self, pid):
+        with self._lock:
+            v = self._views.pop(pid, None)
+            p = self._peers.get(pid)
+        if v:
+            with v["cond"]:
+                v["phase"] = "stopped"
+                v["cond"].notify_all()
+        if p and p.main and not p.main.closed:
+            p.main.msg({"t": "view", "on": False})
+        return True
+
+    def stop_sharing(self):
+        """Stop everyone watching this screen (they can ask again)."""
+        for pid in list(self._watchers):
+            self._drop_watcher(pid)
+            p = self._peers.get(pid)
+            if p and p.main and not p.main.closed:
+                p.main.msg({"t": "view_refused", "why": "stopped"})
+        return True
+
+    def view_input(self, pid, ev):
+        """Mouse and keys from the viewer window: {"k": "abs", x, y} (fractions of the picture),
+        {"k": "button", b, d}, {"k": "wheel", dx, dy}, {"k": "key", code|hid, d}."""
+        v = self._views.get(pid)
+        p = self._peers.get(pid)
+        if not (v and v.get("control") and p and p.main and not p.main.closed):
+            return False
+        k = ev.get("k")
+        if k == "key":
+            hid = ev.get("hid") or keys.DOM_CODES.get(ev.get("code") or "")
+            if not hid:
+                return False
+            ev = {"k": "key", "hid": self._translate(int(hid), pid), "d": bool(ev.get("d"))}
+        p.main.msg(dict(ev, t="vin"))
+        return True
+
+    def view_frame(self, pid, after=0, timeout=10.0):
+        """The newest picture (jpeg bytes, seq) once one newer than `after` exists (the view server)."""
+        v = self._views.get(pid)
+        if not v:
+            return None, -1
+        with v["cond"]:
+            if v["seq"] <= after and v["phase"] != "stopped":
+                v["cond"].wait(timeout)
+            if v["phase"] == "stopped":
+                return None, -1
+            return v["jpeg"], v["seq"]
+
+    def _on_view_msg(self, pid, link, m):
+        t = m.get("t")
+        if t == "view":
+            if not m.get("on"):
+                self._drop_watcher(pid)
+                return
+            if not self._store.get("screen_share") or not self._backend.can_capture:
+                link.msg({"t": "view_refused", "why": "off" if self._backend.can_capture else "unsupported"})
+                return
+            with self._lock:
+                w = self._watchers.get(pid)
+                if not w:
+                    w = self._watchers[pid] = {"latest": None, "event": threading.Event(), "on": True}
+                    threading.Thread(target=self._watcher_sender, args=(pid, w), name="kvm-view-send", daemon=True).start()
+                    self._notice("%s is looking at this screen." % self._peer_name(pid))
+                w["req"] = {"fps": m.get("fps") or 12, "maxw": m.get("maxw") or 1600, "q": m.get("q") or 65}
+            link.msg({"t": "view_ok", "control": bool(self._store.get("screen_control") and self._backend.can_inject)})
+            self._retune_capture()
+            if not self._media_ok(pid) and link.dialer == self._store.id:  # whoever dialled main dials media
+                threading.Thread(target=self._dial, args=(pid, "media"), daemon=True).start()
+            return
+        if t == "vin":
+            if pid not in self._watchers or not self._store.get("screen_control"):
+                return
+            k = m.get("k")
+            if k == "abs":
+                self._backend.handle({"c": "abs", "x": float(m.get("x", 0)), "y": float(m.get("y", 0))})
+            elif k == "button":
+                self._backend.handle({"c": "button", "b": int(m.get("b", 1)), "d": bool(m.get("d"))})
+            elif k == "wheel":
+                self._backend.handle({"c": "wheel", "dx": float(m.get("dx", 0)), "dy": float(m.get("dy", 0))})
+            elif k == "key":
+                self._backend.handle({"c": "key", "k": int(m.get("hid", 0)), "d": bool(m.get("d"))})
+            elif k == "release":
+                self._backend.handle({"c": "release"})
+            return
+        v = self._views.get(pid)
+        if not v:
+            return
+        if t == "view_ok":
+            v.update(phase="live", control=bool(m.get("control")), error=None)
+            if not self._media_ok(pid) and link.dialer == self._store.id:
+                threading.Thread(target=self._dial, args=(pid, "media"), daemon=True).start()
+        elif t == "view_refused":
+            v.update(phase="refused", error={"off": "%s doesn't share its screen. Turn it on in Kvm settings there."
+                                             % self._peer_name(pid),
+                                             "stopped": "%s stopped sharing its screen." % self._peer_name(pid)}.get(m.get("why"),
+                                             "%s can't share its screen yet." % self._peer_name(pid)))
+        elif t == "frame" and "_data" in m:
+            with v["cond"]:
+                v.update(jpeg=m["_data"], w=m.get("w", 0), h=m.get("h", 0), seq=v["seq"] + 1, phase="live")
+                v["cond"].notify_all()
+
+    def _media_ok(self, pid):
+        p = self._peers.get(pid)
+        return bool(p and p.media and not p.media.closed)
+
+    def _retune_capture(self):
+        with self._lock:
+            reqs = [w["req"] for w in self._watchers.values() if w.get("req")]
+        if not reqs:
+            self._backend.handle({"c": "capture", "on": False})
+            return
+        self._backend.handle({"c": "capture", "on": True, "fps": max(r["fps"] for r in reqs),
+                              "maxw": max(r["maxw"] for r in reqs), "q": max(r["q"] for r in reqs)})
+
+    def _drop_watcher(self, pid):
+        with self._lock:
+            w = self._watchers.pop(pid, None)
+        if w:
+            w["on"] = False
+            w["event"].set()
+            self._backend.handle({"c": "release"})  # nothing stays pressed from the viewer
+            self._retune_capture()
+
+    def _on_local_frame(self, ev):
+        with self._lock:
+            watchers = list(self._watchers.values())
+        if not watchers:
+            return
+        frame = ({"t": "frame", "w": ev.get("w"), "h": ev.get("h"), "cursor": ev.get("cursor")}, b64d(ev["jpeg"]))
+        for w in watchers:
+            w["latest"] = frame
+            w["event"].set()
+
+    def _watcher_sender(self, pid, w):
+        while w["on"]:
+            w["event"].wait(5)
+            w["event"].clear()
+            frame, w["latest"] = w["latest"], None
+            if not (frame and w["on"]):
+                continue
+            p = self._peers.get(pid)
+            link = None
+            if p:
+                for l in (p.media, p.bulk, p.main):
+                    if l and not l.closed:
+                        link = l
+                        break
+            if link:
+                link.blob(frame[0], frame[1])
+
     # ==== networking ===============================================================
     def _listen(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -665,7 +850,8 @@ class Agent(object):
         pid = link.peer_id
         with self._lock:
             p = self._peers.setdefault(pid, Peer(pid))
-            old = p.main if link.purpose == "main" else p.bulk
+            slot = link.purpose if link.purpose in ("main", "bulk", "media") else "bulk"
+            old = getattr(p, slot)
             if old and not old.closed:
                 # Both computers dialled at once: keep the link the lower id dialled.
                 keep_new = link.dialer == min(self._store.id, pid)
@@ -675,10 +861,7 @@ class Agent(object):
                     return
                 old.on_close = None
                 old.close()
-            if link.purpose == "main":
-                p.main = link
-            else:
-                p.bulk = link
+            setattr(p, slot, link)
             p.last_seen = time.time()
             if hello.get("name"):
                 self._store.update_pair(pid, name=hello["name"], platform=hello.get("platform"))
@@ -733,8 +916,11 @@ class Agent(object):
                 return
             if link.purpose == "main" and p.main is link:
                 p.main = None
-                if p.bulk:
-                    p.bulk.close()
+                for other in (p.bulk, p.media):
+                    if other:
+                        other.close()
+                self._views.pop(link.peer_id, None)
+                self._drop_watcher(link.peer_id)
                 if self._active == link.peer_id:
                     if self._mode == "driving":
                         self._backend.handle({"c": "grab", "on": False})
@@ -744,6 +930,8 @@ class Agent(object):
                     self._set_mode("home")
             elif p.bulk is link:
                 p.bulk = None
+            elif p.media is link:
+                p.media = None
             for tid, t in list(self._transfers.items()):
                 if t["peer"] == link.peer_id and t["phase"] == "receiving":
                     self._recv_fail(tid, "The connection dropped.")
@@ -851,6 +1039,9 @@ class Agent(object):
                 self._notice("%s is ringing this computer" % self._peer_name(pid))
             self._backend.handle({"c": "action", "a": a, "from": self._peer_name(pid)})
             return
+        if t in ("view", "vin", "view_ok", "view_refused", "frame"):
+            self._on_view_msg(pid, link, m)
+            return
         if t == "files":
             self._on_files(pid, m)
         elif t == "piece":
@@ -951,6 +1142,9 @@ class Agent(object):
         if t == "permissions":
             self._permissions = ev.get("p") or {}
             return
+        if t == "frame":
+            self._on_local_frame(ev)
+            return
         if t == "log":
             self._log(ev.get("text"))
 
@@ -972,10 +1166,10 @@ class Agent(object):
         self._backend.handle({"c": "grab", "on": False})
         self._set_mode("home")
 
-    def _translate(self, hid):
+    def _translate(self, hid, pid=None):
         if not self._store.get("swap_cmd_ctrl"):
             return hid
-        rec = self._store.pair(self._active) or {}
+        rec = self._store.pair(pid or self._active) or {}
         mine, theirs = this_platform(), rec.get("platform")
         if theirs and mine != theirs and "mac" in (mine, theirs):
             return keys.SWAP_CMD_CTRL.get(hid, hid)

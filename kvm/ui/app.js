@@ -152,6 +152,11 @@
         <span>Install Kvm with Kvm-Setup so your other computer’s keyboard also works on Windows admin prompts and when this PC is locked.</span></div>
         <button class="btn-quiet" data-act="get-setup">Get the setup</button></div>`);
     }
+    for (const w of (a && a.watchers) || []) {
+      out.push(`<div class="banner info">${icon('monitor')}<div class="t"><b>${esc(w.name)} is looking at this screen</b>
+        <span>${a.settings && a.settings.screen_control ? 'It can also click and type here.' : 'It can see but not control it.'}</span></div>
+        <button class="btn-quiet" data-act="stop-share">Stop sharing</button></div>`);
+    }
     const html = out.join('');
     const el = $('#banners');
     if (el.dataset.html !== html) { el.dataset.html = html; el.innerHTML = html; }
@@ -210,7 +215,8 @@
           ? `<i class="dotst ${p.connected ? 'on' : ''}"></i>${p.connected ? 'Connected' : (p.online ? 'Connecting…' : 'Not on this network')}${p.side ? ` · to the ${SIDE_NAME[p.side]}` : ''}`
           : `<i class="dotst"></i>Nearby · not paired`;
         const acts = p.paired
-          ? `<button class="btn-quiet" data-act="send" data-pid="${p.id}" ${p.connected ? '' : 'disabled'}>${icon('send')}<span>Send files</span></button>
+          ? `<button class="btn-quiet" data-act="view" data-pid="${p.id}" ${p.connected ? '' : 'disabled'}>${icon('monitor')}<span>Screen</span></button>
+             <button class="btn-quiet" data-act="send" data-pid="${p.id}" ${p.connected ? '' : 'disabled'}>${icon('send')}<span>Send files</span></button>
              <button class="btn-icon lg" data-act="more" data-pid="${p.id}" title="More">${icon('more')}</button>`
           : `<button class="btn-primary inline" data-act="pair" data-pid="${p.id}">Pair</button>`;
         return `<div class="peer-row" data-pid="${p.id}"><div class="ic">${icon(OS_ICON[p.platform] || 'monitor')}</div>
@@ -351,6 +357,8 @@
         <div><span class="k">Save received files to</span><span class="v" style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a ? a.receive_dir : '')}</span>
           <button class="btn-quiet" data-act="pick-dir">Change</button></div>
         ${opt('Ring, lock and sleep from paired computers', 'Lets a paired computer find, lock or put this one to sleep.', s.remote_actions, 'remote_actions')}
+        ${opt('Share this screen', 'Paired computers can see this screen in a Kvm window.', s.screen_share, 'screen_share')}
+        ${opt('Allow control from the viewer', 'They can also click and type on it from that window.', s.screen_control, 'screen_control')}
       </div>
       <div class="label">Updates</div>
       <div class="group">
@@ -405,9 +413,15 @@
       case 'pair': api.pair(pid); break;
       case 'pair-cancel': api.pair_cancel(); closeModal(); break;
       case 'send': api.send_files(pid, false); break;
+      case 'view': {
+        const r = await api.open_viewer(pid);
+        if (r && r.error) toast(r.error, true);
+        break;
+      }
       case 'more': {
         const p = (st.agent.peers || []).find((x) => x.id === pid) || {};
         openMenu(b, [
+          { icon: 'monitor', label: `See ${p.name}'s screen`, run: () => api.open_viewer(pid) },
           { icon: 'send', label: 'Send files…', run: () => api.send_files(pid, false) },
           { icon: 'folder', label: 'Send a folder…', run: () => api.send_files(pid, true) },
           '-',
@@ -420,6 +434,7 @@
         ]);
         break;
       }
+      case 'stop-share': api.stop_sharing(); break;
       case 'cancel-tr': api.cancel_transfer(b.dataset.tid); break;
       case 'reveal': api.reveal(b.dataset.path); break;
       case 'perm-ask': api.request_permissions(); break;

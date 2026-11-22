@@ -111,6 +111,32 @@ kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
 kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
 kernel32.GetModuleHandleW.restype = wintypes.HMODULE
 
+gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+
+
+class BITMAPINFOHEADER(ctypes.Structure):
+    _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG), ("biHeight", wintypes.LONG),
+                ("biPlanes", wintypes.WORD), ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
+                ("biSizeImage", wintypes.DWORD), ("biXPelsPerMeter", wintypes.LONG), ("biYPelsPerMeter", wintypes.LONG),
+                ("biClrUsed", wintypes.DWORD), ("biClrImportant", wintypes.DWORD)]
+
+
+user32.GetDC.restype = wintypes.HDC
+user32.GetDC.argtypes = [wintypes.HWND]
+user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+gdi32.CreateCompatibleDC.restype = wintypes.HDC
+gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+gdi32.CreateCompatibleBitmap.restype = wintypes.HBITMAP
+gdi32.CreateCompatibleBitmap.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
+gdi32.SelectObject.restype = wintypes.HGDIOBJ
+gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+gdi32.BitBlt.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.HDC,
+                         ctypes.c_int, ctypes.c_int, wintypes.DWORD]
+gdi32.GetDIBits.argtypes = [wintypes.HDC, wintypes.HBITMAP, wintypes.UINT, wintypes.UINT, ctypes.c_void_p,
+                            ctypes.c_void_p, wintypes.UINT]
+gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+gdi32.DeleteDC.argtypes = [wintypes.HDC]
+
 _OCR = (32512, 32513, 32514, 32515, 32516, 32642, 32643, 32644, 32645, 32646, 32648, 32649, 32650, 32651)
 
 
@@ -421,6 +447,54 @@ class WinBackend(Backend):
 
     def permissions(self):
         return {"needs": [], "secure_desktop": self._secure, "desktop": self._desk_name}
+
+    # ---- screen sharing ------------------------------------------------------------------
+    def _capture_thread_init(self):
+        self._cap_desk = None
+        self._cap_checked = 0.0
+
+    def _cap_follow(self):
+        """The capture thread follows the input desktop too, so admin prompts and the sign-in
+        screen show up in the viewer (each thread has its own desktop)."""
+        now = time.time()
+        if now - self._cap_checked < 0.5:
+            return
+        self._cap_checked = now
+        h = user32.OpenInputDesktop(0, False, 0x10000000)
+        if not h:
+            return
+        name = _desktop_name(h)
+        if name != self._cap_desk and user32.SetThreadDesktop(h):
+            self._cap_desk = name
+            return
+        user32.CloseDesktop(h)
+
+    def _grab_screen(self):
+        from PIL import Image
+        if self._secure:
+            self._cap_follow()
+        vx, vy = user32.GetSystemMetrics(76), user32.GetSystemMetrics(77)
+        vw, vh = user32.GetSystemMetrics(78), user32.GetSystemMetrics(79)
+        if vw <= 0 or vh <= 0:
+            return None
+        hdc = user32.GetDC(None)
+        mdc = gdi32.CreateCompatibleDC(hdc)
+        bmp = gdi32.CreateCompatibleBitmap(hdc, vw, vh)
+        old = gdi32.SelectObject(mdc, bmp)
+        try:
+            if not gdi32.BitBlt(mdc, 0, 0, vw, vh, hdc, vx, vy, 0x00CC0020 | 0x40000000):  # SRCCOPY | CAPTUREBLT
+                return None
+            bi = BITMAPINFOHEADER(biSize=ctypes.sizeof(BITMAPINFOHEADER), biWidth=vw, biHeight=-vh, biPlanes=1,
+                                  biBitCount=32, biCompression=0)
+            buf = ctypes.create_string_buffer(vw * vh * 4)
+            if not gdi32.GetDIBits(mdc, bmp, 0, vh, buf, ctypes.byref(bi), 0):
+                return None
+            return Image.frombuffer("RGB", (vw, vh), buf.raw, "raw", "BGRX", 0, 1)
+        finally:
+            gdi32.SelectObject(mdc, old)
+            gdi32.DeleteObject(bmp)
+            gdi32.DeleteDC(mdc)
+            user32.ReleaseDC(None, hdc)
 
 
 # ---- helpers ------------------------------------------------------------------------------

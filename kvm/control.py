@@ -14,7 +14,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = 47611
 METHODS = {"status", "rename", "set_setting", "set_side", "forget", "add_address", "pair", "pair_code", "pair_cancel",
-           "action", "go_home", "set_locked", "send_files", "cancel_transfer", "clear_transfers"}
+           "action", "go_home", "set_locked", "send_files", "cancel_transfer", "clear_transfers",
+           "view_start", "view_stop", "view_input", "stop_sharing"}
 
 
 def token_dir():

@@ -55,6 +55,7 @@ class Api(object):
         self._agent = None
         self._mode = "starting"
         self._error = None
+        self._viewers = {}   # pid -> viewer window
 
     def _emit(self, event, payload):
         if self._window:
@@ -139,6 +140,63 @@ class Api(object):
 
     def send_paths(self, pid, paths):
         return self._call("send_files", pid, [p for p in paths or [] if p])
+
+    # the other computer's screen
+    def open_viewer(self, pid):
+        w = self._viewers.get(pid)
+        if w:
+            try:
+                w.restore()
+                w.show()
+                return {"ok": True}
+            except Exception:
+                self._viewers.pop(pid, None)
+        if not self._agent:
+            return {"error": "Kvm is still starting."}
+        try:
+            self._agent.view_start(pid)
+        except Exception as e:
+            return {"error": str(e)}
+        name = "the other computer"
+        try:
+            for p in (self._agent.status() or {}).get("peers", []):
+                if p.get("id") == pid:
+                    name = p.get("name") or name
+        except Exception:
+            pass
+        win = webview.create_window("%s · Kvm" % name, url=os.path.join(UI_DIR, "viewer.html") + "?pid=" + pid,
+                                    js_api=self, width=1280, height=800, min_size=(480, 320), background_color="#000000")
+        self._viewers[pid] = win
+
+        def closed():
+            self._viewers.pop(pid, None)
+            self._call("view_stop", pid)
+        win.events.closed += closed
+        return {"ok": True}
+
+    def viewer_state(self, pid):
+        try:
+            st = self._agent.status() if self._agent else None
+        except Exception:
+            st = None
+        v = ((st or {}).get("views") or {}).get(pid)
+        name = next((p.get("name") for p in (st or {}).get("peers", []) if p.get("id") == pid), None)
+        plat = next((p.get("platform") for p in (st or {}).get("peers", []) if p.get("id") == pid), None)
+        return {"view": v, "name": name, "platform": plat, "me": sys.platform}
+
+    def view_input(self, pid, ev):
+        if not self._agent:
+            return False
+        try:
+            return self._agent.view_input(pid, ev)
+        except Exception:
+            return False
+
+    def view_again(self, pid):
+        return self._call("view_start", pid)
+
+    def stop_sharing(self):
+        return self._call("stop_sharing")
 
     def cancel_transfer(self, tid):
         return self._call("cancel_transfer", tid)

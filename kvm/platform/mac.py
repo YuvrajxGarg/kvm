@@ -12,6 +12,7 @@ positions), from how far the pointer would have gone, so every pointing device c
 
 import ctypes
 import ctypes.util
+import io
 import subprocess
 import threading
 import time
@@ -401,6 +402,48 @@ class MacBackend(Backend):
 
     def permissions(self):
         return mac_permissions(self._tap is not None)
+
+    # ---- screen sharing ------------------------------------------------------------------
+    def _capture_thread_init(self):
+        self._cap_tool = False
+        try:
+            cg = _cg()
+            cg.CGPreflightScreenCaptureAccess.restype = ctypes.c_bool
+            if not cg.CGPreflightScreenCaptureAccess():
+                cg.CGRequestScreenCaptureAccess()  # macOS asks once; then System Settings › Screen Recording
+                self.sink({"t": "log", "text": "screen recording permission needed"})
+        except Exception:
+            pass
+
+    def _grab_screen(self):
+        from PIL import Image
+        if not self._cap_tool:
+            try:
+                img = Quartz.CGWindowListCreateImage(Quartz.CGRectInfinite, Quartz.kCGWindowListOptionOnScreenOnly,
+                                                     Quartz.kCGNullWindowID, Quartz.kCGWindowImageDefault)
+                if img is not None:
+                    w, h = Quartz.CGImageGetWidth(img), Quartz.CGImageGetHeight(img)
+                    bpr = Quartz.CGImageGetBytesPerRow(img)
+                    data = Quartz.CGDataProviderCopyData(Quartz.CGImageGetDataProvider(img))
+                    return Image.frombuffer("RGB", (w, h), bytes(data), "raw", "BGRX", bpr, 1)
+            except Exception:
+                pass
+            self._cap_tool = True  # this macOS has no CGWindowListCreateImage: use the screencapture tool
+        import os
+        import tempfile
+        fd, path = tempfile.mkstemp(suffix=".jpg")
+        os.close(fd)
+        try:
+            subprocess.run(["screencapture", "-x", "-C", "-t", "jpg", path], capture_output=True, timeout=5)
+            with open(path, "rb") as f:
+                img = Image.open(io.BytesIO(f.read()))
+                img.load()
+                return img
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
 
 def mac_permissions(tap_ok=None):

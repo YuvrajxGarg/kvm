@@ -26,10 +26,12 @@ DEFAULTS = {
     "receive_dir": None,          # None: Downloads/Kvm
     "files": True,                # accept files from paired computers
     "remote_actions": True,       # paired computers may Ring, Lock and Sleep this one
+    "screen_share": True,         # paired computers may see this screen
+    "screen_control": True,       # ... and use it with their mouse and keyboard from the viewer
 }
 SETTING_TYPES = {"clipboard": bool, "clipboard_images": bool, "swap_cmd_ctrl": bool, "cross_modifier": str,
                  "return_hotkey": str, "lock_key": str, "speed": float, "receive_dir": str, "files": bool,
-                 "remote_actions": bool}
+                 "remote_actions": bool, "screen_share": bool, "screen_control": bool}
 
 
 def user_data_dir():
