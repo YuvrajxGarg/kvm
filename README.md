@@ -12,9 +12,11 @@ Copy on one, paste on the other. Send files across. No account, no cloud.</p>
 
 ## What it does
 
-- **One mouse and keyboard.** Arrange your computers in Kvm the way they sit on your desk, then push the pointer past
-  that edge. Every pointing device crosses the same way (trackpad, any mouse), and the keyboard always goes with
-  the pointer.
+- **One mouse and keyboard.** Arrange your computers in Kvm the way they sit on your desk, each monitor on its own
+  (a monitor above the Mac, a laptop to the right and lower), then push the pointer past an edge. It crosses only
+  where the screens really touch, and comes in at the matching spot. Every pointing device crosses the same way
+  (trackpad, any mouse), and the keyboard always goes with the pointer. Going back needs a short deliberate push,
+  so a mouse settling after a move doesn't throw the pointer home.
 - **Admin prompts and the sign-in screen (Windows).** The setup installs the Kvm service, so your Mac's keyboard
   and mouse also work on UAC prompts, the lock screen and the sign-in screen after a restart. Ctrl+Alt+Del works too.
 - **Shortcuts feel native.** ⌘C on the Mac is Ctrl+C on the PC (switchable). Media and volume keys carry over.

@@ -21,6 +21,7 @@ import time
 
 from . import __version__, crypto, keys
 from .link import (Link, LinkClosed, decode, read_json, tune, write_json)
+from . import screens as geo
 from .screens import OPPOSITE, SIDES
 from .store import Store, this_platform
 
@@ -176,6 +177,7 @@ class Agent(object):
                     "paired": True, "connected": connected, "online": connected or pid in self._nearby,
                     "side": rec.get("side"), "host": rec.get("host"), "version": p.version if p else None,
                     "screens": p.screens if p else None,
+                    "layout": self._layout(pid), "layout_set": bool(rec.get("layout")),
                     "phone": dict(self._phones.get(pid) or {}, notifs=list((self._phones.get(pid) or {}).get("notifs") or []))
                     if rec.get("platform") in PHONES else None,
                 })
@@ -246,10 +248,46 @@ class Agent(object):
             for other, rec in self._store.pairs().items():
                 if other != pid and side and rec.get("side") == side:
                     self._store.update_pair(other, side=None)
+            if (self._store.pair(pid) or {}).get("side") != side:
+                self._store.update_pair(pid, layout=None)
             self._store.update_pair(pid, side=side)
             p = self._peers.get(pid)
         if p and p.main:
             p.main.msg({"t": "layout", "side": OPPOSITE.get(side) if side else None})
+        self._configure_backend()
+        return True
+
+    def set_layout(self, pid, items):
+        """Place another computer's screens around ours, one by one (the arrangement editor).
+        items: [{"r": its screen in its own coordinates, "at": [x, y] of its top-left in ours}]."""
+        items = _clean_layout(items)
+        if not items:
+            return False
+        ts = time.time()
+        with self._lock:
+            if not self._store.pair(pid):
+                return False
+            side = geo.side_of(self._screens, items)
+            for other, rec in self._store.pairs().items():
+                if other != pid and rec.get("side") == side:
+                    self._store.update_pair(other, side=None)
+            self._store.update_pair(pid, side=side, layout=items, layout_ts=ts)
+            p = self._peers.get(pid)
+        if p and p.main and not p.main.closed:
+            p.main.msg({"t": "layout", "side": OPPOSITE[side]})
+            p.main.msg({"t": "arrange", "items": geo.inverse(self._screens, items), "ts": ts})
+        self._configure_backend()
+        return True
+
+    def reset_layout(self, pid):
+        """Back to the whole arrangement centred on its side."""
+        ts = time.time()
+        with self._lock:
+            self._store.update_pair(pid, layout=None, layout_ts=ts)
+            items = self._layout(pid)
+            p = self._peers.get(pid)
+        if items and p and p.main and not p.main.closed:
+            p.main.msg({"t": "arrange", "items": geo.inverse(self._screens, items), "ts": ts})
         self._configure_backend()
         return True
 
@@ -1376,8 +1414,13 @@ class Agent(object):
                 self._store.update_pair(pid, name=hello["name"], platform=hello.get("platform"))
         link.start()
         if link.purpose == "main":
-            link.msg({"t": "ready", "version": __version__, "screens": self._screens,
-                      "side": OPPOSITE.get((self._store.pair(pid) or {}).get("side"))})
+            rec = self._store.pair(pid) or {}
+            ready = {"t": "ready", "version": __version__, "screens": self._screens,
+                     "side": OPPOSITE.get(rec.get("side"))}
+            if rec.get("layout") and rec.get("layout_ts"):
+                ready["arrange"] = geo.inverse(self._screens, rec["layout"])
+                ready["ts"] = rec["layout_ts"]
+            link.msg(ready)
             self._configure_backend()
             if link.dialer == self._store.id:
                 threading.Thread(target=self._dial, args=(pid, "bulk"), daemon=True).start()
@@ -1507,14 +1550,25 @@ class Agent(object):
             if p:
                 p.version = m.get("version")
                 p.screens = m.get("screens")
+            if m.get("screens"):
+                self._store.update_pair(pid, screens=m.get("screens"))
             mine = (self._store.pair(pid) or {}).get("side")
             if not mine and m.get("side") in SIDES and not self._side_taken(m["side"], pid):
                 self._store.update_pair(pid, side=m["side"])
-                self._configure_backend()
+            if m.get("arrange"):
+                self._on_arrange(pid, m["arrange"], m.get("ts"))
+            self._configure_backend()
             return
         if t == "screens":
             if p:
                 p.screens = m.get("rects")
+            if m.get("rects"):
+                self._store.update_pair(pid, screens=m.get("rects"))
+            self._configure_backend()
+            return
+        if t == "arrange":
+            self._on_arrange(pid, m.get("items"), m.get("ts"))
+            self._configure_backend()
             return
         if t == "layout":
             side = m.get("side")
@@ -1523,6 +1577,8 @@ class Agent(object):
                     for other, rec in self._store.pairs().items():
                         if other != pid and rec.get("side") == side:
                             self._store.update_pair(other, side=None)
+                if (self._store.pair(pid) or {}).get("side") != side:
+                    self._store.update_pair(pid, layout=None)
                 self._store.update_pair(pid, side=side)
                 self._configure_backend()
             return
@@ -1534,8 +1590,13 @@ class Agent(object):
                 side = m.get("side")
                 self._set_mode("driven", pid, side)
                 self._backend.handle({"c": "lock", "on": bool(m.get("locked"))})
-                self._backend.handle({"c": "driven", "exits": [side] if side in SIDES else [], "side": side,
-                                      "frac": float(m.get("frac", 0.5))})
+                cmd = {"c": "driven", "exits": [side] if side in SIDES else [], "side": side,
+                       "frac": float(m.get("frac", 0.5))}
+                if m.get("pt") and m.get("map") and m.get("home"):
+                    # The driver's arrangement: where we come in, and which stretch of which edge
+                    # leads back to which of its screens.
+                    cmd.update(pt=m["pt"], map=m["map"], home=m["home"])
+                self._backend.handle(cmd)
             return
         if t == "busy":
             with self._lock:
@@ -1548,7 +1609,9 @@ class Agent(object):
                 if self._mode == "driving" and self._active == pid:
                     side = self._side
                     self._backend.handle({"c": "grab", "on": False})
-                    if side:
+                    if m.get("pt"):
+                        self._backend.handle({"c": "place", "pt": m["pt"]})
+                    elif side:
                         self._backend.handle({"c": "place", "side": side, "frac": float(m.get("frac", 0.5))})
                     self._set_mode("home")
             return
@@ -1649,14 +1712,17 @@ class Agent(object):
                 link.key(self._translate(ev["k"]), ev["d"])
             return
         if t == "cross":
-            self._on_cross(ev["side"], ev.get("frac", 0.5))
+            self._on_cross(ev["side"], ev.get("frac", 0.5), ev.get("x"), ev.get("y"))
             return
         if t == "exit":
             with self._lock:
                 if self._mode == "driven":
                     link = self._active_link()
                     if link:
-                        link.msg({"t": "leave", "side": ev.get("side"), "frac": ev.get("frac", 0.5)})
+                        leave = {"t": "leave", "side": ev.get("side"), "frac": ev.get("frac", 0.5)}
+                        if ev.get("pt"):
+                            leave["pt"] = ev["pt"]
+                        link.msg(leave)
                     self._set_mode("home")
             return
         if t == "home_hotkey":
@@ -1726,16 +1792,74 @@ class Agent(object):
         if t == "log":
             self._log(ev.get("text"))
 
-    def _on_cross(self, side, frac):
+    def _on_cross(self, side, frac, x=None, y=None):
         with self._lock:
-            pid = self._peer_at(side)
+            pid, enter = self._peer_at(side), None
+            if x is not None and y is not None:
+                hit = self._layout_hit(x, y, side)
+                if hit:
+                    pid, item = hit
+                    lx, ly = geo.landing(geo.placed(item), x, y, side)
+                    pt = geo.to_remote(item, lx, ly)
+                    theirs = geo.Screens([i["r"] for i in self._layout(pid)])
+                    # frac: for computers before 1.6, which only know sides.
+                    enter = {"pt": pt, "frac": theirs.frac(pt[0], pt[1], OPPOSITE[side]),
+                             "map": self._layout(pid), "home": self._screens}
             p = self._peers.get(pid) if pid else None
             if self._mode != "home" or not (p and p.main and not p.main.closed):
                 self._backend.handle({"c": "grab", "on": False})
                 return
             self._acc = [0.0, 0.0]
             self._set_mode("driving", pid, side)
-            p.main.msg({"t": "enter", "side": OPPOSITE[side], "frac": frac, "locked": self._locked})
+            msg = {"t": "enter", "side": OPPOSITE[side], "frac": frac, "locked": self._locked}
+            msg.update(enter or {})
+            p.main.msg(msg)
+
+    def _layout(self, pid):
+        """Where each screen of another computer sits in our coordinates, or None (not on the desk,
+        or its screens not known yet). Screens the stored layout doesn't know go centred on its side."""
+        rec = self._store.pair(pid) or {}
+        p = self._peers.get(pid)
+        theirs = (p.screens if p else None) or rec.get("screens")
+        side = rec.get("side")
+        if not side or not theirs or not self._screens or rec.get("platform") in PHONES:
+            return None
+        stored = rec.get("layout") or []
+        default = geo.default_layout(self._screens, theirs, side)
+        out = []
+        for d in default:
+            same = [i for i in stored if all(abs(float(i["r"][k]) - d["r"][k]) < 1.5 for k in range(4))]
+            out.append({"r": d["r"], "at": list(same[0]["at"]) if same else d["at"]})
+        return out
+
+    def _layout_hit(self, x, y, side):
+        """(pid, layout item) of the connected computer's screen just past our `side` edge at (x, y)."""
+        best = None
+        for pid in self._store.pairs():
+            p = self._peers.get(pid)
+            if not (p and p.main and not p.main.closed):
+                continue
+            for it in self._layout(pid) or []:
+                r = geo.placed(it)
+                if geo.beyond([r], x, y, side, tol=48.0) is None:
+                    continue
+                d = {"right": r[0] - x, "left": x - (r[0] + r[2]), "bottom": r[1] - y, "top": y - (r[1] + r[3])}[side]
+                if best is None or d < best[0]:
+                    best = (d, pid, it)
+        return (best[1], best[2]) if best else None
+
+    def _on_arrange(self, pid, items, ts):
+        """The other computer rearranged us on its desk: mirror it, unless ours is newer."""
+        items = _clean_layout(items)
+        rec = self._store.pair(pid) or {}
+        if not items or (rec.get("layout_ts") or 0) >= (ts or 0):
+            return
+        side = geo.side_of(self._screens, items)
+        if self._side_taken(side, pid):
+            for other, r in self._store.pairs().items():
+                if other != pid and r.get("side") == side:
+                    self._store.update_pair(other, side=None)
+        self._store.update_pair(pid, side=side, layout=items, layout_ts=ts)
 
     def _leave_driving(self, recall):
         link = self._active_link()
@@ -1778,13 +1902,14 @@ class Agent(object):
         return rec.get("name") or "the other computer"
 
     def _configure_backend(self):
-        sides = []
+        sides, targets = [], []
         for pid, rec in self._store.pairs().items():
             p = self._peers.get(pid)
             if rec.get("side") and p and p.main and not p.main.closed:
                 sides.append(rec["side"])
+                targets += [geo.placed(i) for i in self._layout(pid) or []]
         s = self._store
-        self._backend.handle({"c": "config", "sides": sides, "cross_mod": s.get("cross_modifier"),
+        self._backend.handle({"c": "config", "sides": sides, "targets": targets, "cross_mod": s.get("cross_modifier"),
                               "return_hotkey": s.get("return_hotkey"), "lock_key": s.get("lock_key"),
                               "clipboard": bool(s.get("clipboard") and any(p.main for p in self._peers.values())),
                               "clipboard_images": bool(s.get("clipboard_images"))})
@@ -1883,3 +2008,17 @@ def _lan_addresses():
     except OSError:
         pass
     return out
+
+
+def _clean_layout(items):
+    """Layout items from the window or the network, checked: [{"r": [x, y, w, h], "at": [x, y]}]."""
+    out = []
+    try:
+        for i in items or []:
+            r = [float(v) for v in i["r"][:4]]
+            at = [float(v) for v in i["at"][:2]]
+            if len(r) == 4 and len(at) == 2 and r[2] > 0 and r[3] > 0 and all(abs(v) < 1e6 for v in r + at):
+                out.append({"r": r, "at": [round(at[0]), round(at[1])]})
+    except (KeyError, TypeError, ValueError, IndexError):
+        return []
+    return out[:16]
