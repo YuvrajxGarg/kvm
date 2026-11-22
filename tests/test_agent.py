@@ -242,6 +242,13 @@ class TwoComputers(unittest.TestCase):
         self.pc.view_input(self.mac_id, {"k": "abs", "x": 0.5, "y": 0.5})
         self.assertTrue(wait(lambda: any(e[0] == "move" and abs(e[1] - 2720) < 1 and abs(e[2] - 720) < 1
                                          for e in self.mac_be.posted)))
+        # It carries on through a dropped connection.
+        self.mac._peers[self.pc_id].main.close()
+        self.assertTrue(wait(lambda: any(p["connected"] for p in self.mac.status()["peers"] if p["id"] == self.pc_id), 15))
+        seq = self.pc.status()["views"][self.mac_id]["seq"]
+        self.assertTrue(wait(lambda: self.pc.status()["views"][self.mac_id]["seq"] > seq + 2, 15))
+        self.assertEqual(self.mac.status()["extend"]["out"][self.pc_id]["phase"], "live")
+        self.assertTrue(self.pc.status()["extend"]["in"])
         # Closing it on the PC removes the Mac's extra display.
         self.pc.extend_end(self.mac_id)
         self.assertTrue(wait(lambda: ("vdisplay", False) in self.mac_be.posted))

@@ -809,10 +809,10 @@ class Agent(object):
     def extend_end(self, pid):
         """(Showing another computer's display) close it: that computer removes its extra display."""
         with self._lock:
-            had = self._extend_in.pop(pid, None)
+            self._extend_in.pop(pid, None)
         self.view_stop(pid)
         p = self._peers.get(pid)
-        if had and p and p.main and not p.main.closed:
+        if p and p.main and not p.main.closed:  # even if a reconnect forgot it here: that computer still has it
             p.main.msg({"t": "extend_refused", "why": "closed"})
         return True
 
@@ -823,6 +823,8 @@ class Agent(object):
         for pid, v in out:
             p = self._peers.get(pid)
             if ev.get("on") and self._vrect:
+                if v.get("phase") == "reconnecting" and not (p and p.main and not p.main.closed):
+                    continue
                 v.update(phase="live", error=None)
                 if p and p.main and not p.main.closed:
                     p.main.msg({"t": "extend", "on": True, "w": v["w"], "h": v["h"]})
@@ -1183,6 +1185,10 @@ class Agent(object):
                 asks.append({"t": "listen", "on": True})
             if self._mic_out.get(pid, {}).get("phase") in ("asking", "live", "reconnecting"):
                 asks.append({"t": "mic", "on": True})
+            e = self._extend_out.get(pid)
+            if e and e.get("phase") in ("live", "reconnecting") and self._vrect:
+                e.update(phase="live")
+                asks.append({"t": "extend", "on": True, "w": e["w"], "h": e["h"]})
         for m in asks:
             link.msg(m)
 
@@ -1234,13 +1240,14 @@ class Agent(object):
                         other.close()
                 # What we asked of that computer (its screen, its sound, our mic there) is asked
                 # again when it reconnects; what it asked of us, it asks again itself.
-                for d in (self._views, self._hear, self._mic_out):
+                for d in (self._views, self._hear, self._mic_out, self._extend_out):
                     v = d.get(link.peer_id)
                     if v and v.get("phase") != "refused":
                         v.update(phase="reconnecting")
                 self._drop_watcher(link.peer_id)
                 self._drop_listener(link.peer_id)
-                self._extend_in.pop(link.peer_id, None)
+                # _extend_in stays: the display window waits through a reconnect, and the other
+                # computer asks again (or says it stopped).
                 self._drop_mic_in(link.peer_id)
                 self._retune_mic()
                 if self._active == link.peer_id:
