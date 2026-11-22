@@ -367,8 +367,13 @@ class Backend(object):
             cur = self.pos or (self.screens.left + 10, self.screens.top + 10)
         pt = None
         if self.home and not self.locked:
-            nx, ny, _, _ = self.screens.step(cur[0], cur[1], dx, dy, ())
-            out = None if self.screens.at(cur[0] + dx, cur[1] + dy) else self._way_home(cur, dx, dy)
+            moved = self._desk_step(cur, dx, dy)
+            if moved is not None:
+                nx, ny = moved
+                out = None if self._desk_has(cur, dx, dy) else self._way_home(cur, dx, dy)
+            else:
+                nx, ny, _, _ = self.screens.step(cur[0], cur[1], dx, dy, ())
+                out = None if self.screens.at(cur[0] + dx, cur[1] + dy) else self._way_home(cur, dx, dy)
             exit_side, frac = (out[0], 0.5) if out else (None, 0.0)
             if out:
                 pt, over = out[1], out[2]
@@ -393,6 +398,50 @@ class Backend(object):
             self.push = 0.0
         self.pos = (nx, ny)
         self._post_move(nx, ny, set(self.buttons_inj))
+
+    def _map_item(self, r):
+        for it in self.map:
+            q = it.get("r") or []
+            if len(q) >= 4 and len(it.get("at") or []) >= 2 and all(abs(float(q[i]) - r[i]) < 1.5 for i in range(4)):
+                return it
+        return None
+
+    def _desk_point(self, cur, dx, dy):
+        """Where this move lands on the driver's desk (its coordinates), or None without a layout."""
+        r = self.screens.at(cur[0], cur[1]) or self.screens.nearest(cur[0], cur[1])
+        item = self._map_item(r)
+        if item is None:
+            return None
+        return cur[0] + dx + item["at"][0] - r[0], cur[1] + dy + item["at"][1] - r[1]
+
+    def _desk_has(self, cur, dx, dy):
+        """True when the move lands on one of our own screens as they sit on the driver's desk."""
+        q = self._desk_point(cur, dx, dy)
+        if q is None:
+            return False
+        for it in self.map:
+            a, rr = it.get("at") or [], it.get("r") or []
+            if len(a) >= 2 and len(rr) >= 4 and a[0] <= q[0] < a[0] + rr[2] and a[1] <= q[1] < a[1] + rr[3]:
+                return True
+        return False
+
+    def _desk_step(self, cur, dx, dy):
+        """Being driven with a layout: move between our own screens the way they sit on the
+        driver's desk, not the way this computer's display settings arrange them (a laptop that
+        Windows puts below the monitor must not catch a pointer heading for the Mac below it).
+        Returns our new (x, y), or None when there's no layout for the screen the pointer is on."""
+        q = self._desk_point(cur, dx, dy)
+        if q is None:
+            return None
+        for it in self.map:
+            a, rr = it.get("at") or [], it.get("r") or []
+            if len(a) >= 2 and len(rr) >= 4 and a[0] <= q[0] < a[0] + rr[2] and a[1] <= q[1] < a[1] + rr[3]:
+                x, y = q[0] - a[0] + rr[0], q[1] - a[1] + rr[1]
+                if self.screens.at(x, y):
+                    return x, y
+        # Off every screen on the desk: stop at the edge of the one the pointer is on.
+        r = self.screens.at(cur[0], cur[1]) or self.screens.nearest(cur[0], cur[1])
+        return min(max(cur[0] + dx, r[0]), r[0] + r[2] - 1), min(max(cur[1] + dy, r[1]), r[1] + r[3] - 1)
 
     def _way_home(self, cur, dx, dy):
         """Being driven with a layout: does this move leave our screens onto one of the driver's?
