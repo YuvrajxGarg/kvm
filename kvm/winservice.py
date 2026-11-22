@@ -99,7 +99,9 @@ class HelperProxy(Backend):
         self._send({"c": "quit"})
 
     def _screens(self):
-        return self.screens.public()
+        # Backend.__init__ asks before the helper has reported the real screens.
+        s = getattr(self, "screens", None)
+        return s.public() if s else [(0, 0, 1920, 1080)]
 
     def permissions(self):
         return dict(self._perm, helper=bool(self._proc), session=self._session)
