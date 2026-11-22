@@ -36,6 +36,7 @@ pip install --quiet pyinstaller certifi -r requirements.txt
 native/build.sh
 pyinstaller --noconfirm --log-level WARN Kvm.spec
 rm -rf "dist/Kvm"   # the .app is the deliverable on macOS
+installer/sign_mac.sh Kvm com.yuvrajgarg.kvm
 
 if [ "$1" = "--release" ]; then
   (cd dist && ditto -c -k --keepParent Kvm.app Kvm-mac.zip \

@@ -173,7 +173,7 @@
     const perm = a && a.permissions;
     if (perm && perm.needs && perm.needs.length) {
       out.push(`<div class="banner">${icon('alert')}<div class="t"><b>Allow Kvm to use the keyboard and mouse</b>
-        <span>macOS needs ${perm.needs.map((n) => n === 'accessibility' ? 'Accessibility' : 'Input Monitoring').join(' and ')} for Kvm in Privacy &amp; Security. Turn it on, then reopen Kvm.</span></div>
+        <span>macOS needs ${perm.needs.map((n) => n === 'accessibility' ? 'Accessibility' : 'Input Monitoring').join(' and ')} for Kvm in Privacy &amp; Security. Turn it on, then reopen Kvm. If Kvm is already on there, select it, remove it with −, add it again with +, then reopen Kvm.</span></div>
         <button class="btn-quiet" data-act="perm-ask">Ask again</button>
         <button class="btn-quiet" data-act="perm-open" data-which="${perm.needs[0]}">Open Settings</button></div>`);
     }
