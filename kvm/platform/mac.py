@@ -19,7 +19,7 @@ import time
 
 import Quartz
 from AppKit import NSBitmapImageRep, NSEvent, NSPasteboard, NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF
-from Foundation import NSData
+from Foundation import NSURL, NSData
 
 from .. import keys
 from .base import Backend
@@ -64,6 +64,7 @@ def _cg():
 
 class MacBackend(Backend):
     name = "mac"
+    shortcut_mod = "lmeta"
     can_capture = True
     can_inject = True
     can_vdisplay = True  # CGVirtualDisplay, through kvm-vdisplay
@@ -362,6 +363,12 @@ class MacBackend(Backend):
         self._pb_count = n
         got = None
         types = self._pb.types() or []
+        if "org.nspasteboard.ConcealedType" in types and NSPasteboardTypeString in types:
+            # Password managers mark what they copy (nspasteboard.org).
+            s = self._pb.stringForType_(NSPasteboardTypeString)
+            got = ("secret", str(s or ""))
+            self._pb_cache = got
+            return got
         if NSPasteboardTypeString in types:
             s = self._pb.stringForType_(NSPasteboardTypeString)
             if s is not None:
@@ -385,6 +392,23 @@ class MacBackend(Backend):
             self._pb.setData_forType_(NSData.dataWithBytes_length_(data, len(data)), NSPasteboardTypePNG)
         self._pb_count = self._pb.changeCount()
         self._pb_cache = (kind, data)
+
+    def _clip_files_get(self):
+        out = []
+        for item in self._pb.pasteboardItems() or []:
+            s = item.stringForType_("public.file-url")
+            if s:
+                u = NSURL.URLWithString_(s)
+                path = u.filePathURL().path() if u is not None and u.filePathURL() is not None else None
+                if path:
+                    out.append(str(path))
+        return out
+
+    def _clip_files_put(self, paths):
+        self._pb.clearContents()
+        self._pb.writeObjects_([NSURL.fileURLWithPath_(p) for p in paths])
+        self._pb_count = self._pb.changeCount()
+        self._pb_cache = None
 
     # ---- actions ----------------------------------------------------------------------
     def action(self, what, cmd):

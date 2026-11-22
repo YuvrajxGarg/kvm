@@ -108,6 +108,12 @@ class Api(object):
     def set_layout(self, pid, items):
         return self._call("set_layout", pid, items)
 
+    def clip_use(self, i):
+        return self._call("clip_use", i)
+
+    def clip_clear(self):
+        return self._call("clip_clear")
+
     def reset_layout(self, pid):
         return self._call("reset_layout", pid)
 

@@ -18,12 +18,16 @@ Events a backend sends:
   {"t": "audio", "src", "pcm"} / {"t": "audio_err", ...}   sound (see kvm/audio.py)
   {"t": "vdisplay", "on", "rect", "error"}  the extra (virtual) display for extending onto another computer
   {"t": "camframe", "jpeg", "w", "h"} / {"t": "camera", "on", "error"}   this computer's camera
+  {"t": "toggle_share"}                     the sharing hotkey was double-tapped
+  {"t": "copy_files", "grabbed"} / {"t": "paste_files", "grabbed"}   Ctrl+Alt+C / Ctrl+Alt+V
+  {"t": "files_copied", "paths", "req"}     (after a "copy_files" command) the files selected here
   {"t": "log", "text"}
 """
 
 import base64
 import hashlib
 import io
+import os
 import queue
 import threading
 import time
@@ -44,6 +48,7 @@ CLIP_PNG_MAX = 24 << 20
 
 class Backend(object):
     name = "base"
+    shortcut_mod = "lctrl"      # the key copy and paste shortcuts use here (Command on a Mac)
     can_capture = False
     can_inject = False
 
@@ -61,6 +66,16 @@ class Backend(object):
         self.grabbed = False
         self.locked = False
         self.exits = []
+        self.share_out = True        # this keyboard and mouse may go to other computers
+        self.edge_resistance = 0.0   # how far to push past the edge before crossing
+        self.edge_push = 0.0
+        self.reverse_scroll = False  # flip scrolling that comes from another computer
+        self.toggle_key = None       # double-tap it to turn sharing on and off
+        self._tap_down = 0.0
+        self._tap_up = 0.0
+        self._swallowed = None
+        self.file_keys = True        # Ctrl+Alt+C / Ctrl+Alt+V copy and paste files between computers
+        self.clip_secrets = False    # also share what password managers mark as secret
         self.targets = []            # other computers' screens placed around ours (our coordinates)
         self.map = []                # being driven: our screens in the driver's space ({"r", "at"})
         self.home = []               # being driven: the driver's screens
@@ -130,6 +145,12 @@ class Backend(object):
         if c == "config":
             self.watch_sides = [s for s in cmd.get("sides", []) if s in ("left", "right", "top", "bottom")]
             self.targets = [list(map(float, r[:4])) for r in cmd.get("targets") or []]
+            self.share_out = bool(cmd.get("share_out", True))
+            self.edge_resistance = max(0.0, float(cmd.get("edge_resistance") or 0))
+            self.reverse_scroll = bool(cmd.get("reverse_scroll"))
+            self.toggle_key = keys.BY_NAME.get(cmd.get("toggle_key") or "")
+            self.file_keys = bool(cmd.get("file_keys", True))
+            self.clip_secrets = bool(cmd.get("clipboard_secrets"))
             self.cross_mod = cmd.get("cross_mod") or ""
             self.return_combo = keys.parse_combo(cmd.get("return_hotkey") or "ctrl+alt+esc")
             self.lock_key = keys.BY_NAME.get(cmd.get("lock_key") or "scrolllock")
@@ -164,6 +185,12 @@ class Backend(object):
             self.inject_key(cmd["k"], cmd["d"])
         elif c == "release":
             self.release()
+        elif c == "copy_files":
+            threading.Thread(target=self._copy_files, args=(cmd.get("req"),), daemon=True).start()
+        elif c == "paste":
+            threading.Thread(target=self._paste, daemon=True).start()
+        elif c == "clip_files":
+            self.clip_files(cmd.get("paths") or [])
         elif c == "clip_set":
             self.clip_set(cmd.get("kind"), cmd.get("data"))
         elif c == "action":
@@ -197,8 +224,10 @@ class Backend(object):
     # ---- driving: what the platform capture calls -----------------------------
     def on_local_move(self, x, y, dx, dy):
         """Pointer moved here while not grabbed. Returns True to swallow the event."""
-        if self.grabbed or not (self.watch_sides or self.targets) or self.locked or self.buttons_local:
+        if self.grabbed or not (self.watch_sides or self.targets) or self.locked or self.buttons_local \
+                or not self.share_out:
             self.edge_hits = {}
+            self.edge_push = 0.0
             return False
         if self.cross_mod and not (self.held_local & _mod_set(self.cross_mod)):
             return False
@@ -208,13 +237,22 @@ class Backend(object):
                 pushing = (side == "right" and dx > 0) or (side == "left" and dx < 0) or \
                           (side == "bottom" and dy > 0) or (side == "top" and dy < 0)
                 self.edge_hits[side] = self.edge_hits.get(side, 0) + 1
-                if pushing or self.edge_hits[side] >= 3:
-                    self.edge_hits = {}
-                    self.grab(True)
-                    self.sink({"t": "cross", "side": side, "frac": self.screens.frac(x, y, side), "x": x, "y": y})
-                    return True
+                if self.edge_resistance > 0:
+                    # Edge resistance: keep pushing this far past the edge to cross.
+                    d = {"right": dx, "left": -dx, "bottom": dy, "top": -dy}[side]
+                    self.edge_push += max(d, 0.0) if pushing else 4.0
+                    if self.edge_push < self.edge_resistance:
+                        continue
+                elif not (pushing or self.edge_hits[side] >= 3):
+                    continue
+                self.edge_hits = {}
+                self.edge_push = 0.0
+                self.grab(True)
+                self.sink({"t": "cross", "side": side, "frac": self.screens.frac(x, y, side), "x": x, "y": y})
+                return True
             else:
-                self.edge_hits.pop(side, None)
+                if self.edge_hits.pop(side, None):
+                    self.edge_push = 0.0
         return False
 
     def on_local_key(self, hid, down):
@@ -225,6 +263,16 @@ class Backend(object):
             self.held_local.add(hid)
         else:
             self.held_local.discard(hid)
+        self._watch_tap(hid, down)
+        if self.file_keys and down and hid in (keys.BY_NAME["c"], keys.BY_NAME["v"]) \
+                and (self.held_local & keys.CTRL) and (self.held_local & keys.ALT) \
+                and not (self.held_local & (keys.META | keys.SHIFT)):
+            self.sink({"t": "copy_files" if hid == keys.BY_NAME["c"] else "paste_files", "grabbed": self.grabbed})
+            self._swallowed = hid
+            return True
+        if not down and hid == self._swallowed:
+            self._swallowed = None
+            return True
         if down and hid == self.lock_key:
             self.locked = not self.locked
             self.sink({"t": "lock", "on": self.locked})
@@ -236,6 +284,29 @@ class Backend(object):
             self.sink({"t": "key", "k": hid, "d": bool(down)})
             return True
         return False
+
+    def _watch_tap(self, hid, down):
+        """Double-tap of the sharing hotkey (a lone modifier, pressed and let go twice quickly)."""
+        if self.toggle_key is None:
+            return
+        now = time.time()
+        if hid != self.toggle_key:
+            if down:
+                self._tap_down = self._tap_up = 0.0
+            return
+        if down:
+            if self.held_local - {hid}:
+                self._tap_down = self._tap_up = 0.0
+                return
+            if self._tap_up and now - self._tap_up < 0.4:
+                self._tap_down = self._tap_up = 0.0
+                self.sink({"t": "toggle_share"})
+                return
+            self._tap_down = now
+        elif self._tap_down and now - self._tap_down < 0.35:
+            self._tap_up = now
+        else:
+            self._tap_up = 0.0
 
     def on_local_button(self, b, down):
         if down:
@@ -367,6 +438,8 @@ class Backend(object):
         self._post_button(b, down, cur[0], cur[1])
 
     def inject_wheel(self, dx, dy):
+        if self.reverse_scroll:
+            dx, dy = -dx, -dy
         self._post_wheel(dx, dy)
 
     def inject_key(self, hid, down):
@@ -503,12 +576,64 @@ class Backend(object):
         """A PIL image of the whole desktop (every monitor), or None."""
         return None
 
+    # ---- copying files between computers ----------------------------------------------
+    def _wait_mods_up(self, timeout=2.0):
+        """Wait for Ctrl and Alt of the shortcut to be let go, so the copy or paste we type here
+        isn't read as Ctrl+Alt+something."""
+        end = time.time() + timeout
+        while time.time() < end and ((self.held_local | self.held_inj) & keys.MODIFIERS):
+            time.sleep(0.03)
+
+    def _shortcut(self, key):
+        mod, k = keys.BY_NAME[self.shortcut_mod], keys.BY_NAME[key]
+        self.held_inj.add(mod)  # so the key carries the modifier's flag (macOS)
+        try:
+            for hid, d in ((mod, True), (k, True), (k, False)):
+                self._post_key(hid, d)
+                time.sleep(0.01)
+        finally:
+            self.held_inj.discard(mod)
+            self._post_key(mod, False)
+
+    def _copy_files(self, req):
+        """Copy what's selected here (Finder, Explorer) and report the files it is."""
+        try:
+            self._wait_mods_up()
+            before = self._clip_files_get()
+            self._shortcut("c")
+            paths = []
+            for _ in range(20):
+                time.sleep(0.05)
+                paths = self._clip_files_get()
+                if paths and paths != before:
+                    break
+            self.sink({"t": "files_copied", "paths": paths or [], "req": req})
+        except Exception as e:
+            self.sink({"t": "files_copied", "paths": [], "req": req, "error": str(e)})
+
+    def _paste(self):
+        self._wait_mods_up()
+        self._shortcut("v")
+
+    def clip_files(self, paths):
+        """Put files on this clipboard, so a normal paste puts them anywhere."""
+        paths = [p for p in paths if os.path.exists(p)]
+        if paths:
+            self._clip_files_put(paths)
+            self._clip_last = hashlib.sha256(("files:" + "\n".join(paths)).encode("utf-8")).hexdigest()
+
     # ---- clipboard ---------------------------------------------------------------
     def _check_clipboard(self):
         got = self._clip_get(self.clip_images)
         if not got:
             return
         kind, data = got
+        if kind == "secret":
+            # A password manager marked it as secret: don't send it, unless that's been asked for.
+            if not self.clip_secrets:
+                self._clip_last = "secret:%s" % time.time()
+                return
+            kind = "text"
         h = hashlib.sha256((kind + ":").encode() + (data.encode("utf-8") if kind == "text" else data)).hexdigest()
         if self._clip_last is None:
             self._clip_last = h  # what's there when Kvm starts isn't news
@@ -571,6 +696,13 @@ class Backend(object):
     def _clip_put(self, kind, data):
         pass
 
+    def _clip_files_get(self):
+        """Paths of files on this clipboard (copied in Finder or Explorer), or []."""
+        return []
+
+    def _clip_files_put(self, paths):
+        pass
+
 
 def _room(screens, cur, side):
     """How far the pointer is from our `side` edge of the screen it's on."""
@@ -623,6 +755,7 @@ class FakeBackend(Backend):
         self.cursor = (100.0, 100.0)
         self.posted = []
         self.clip = None
+        self.files_clip = []
         self.sound = []           # ("capture", src, on) / ("play", sink, pcm bytes)
         self.audio_ok = True
         Backend.__init__(self)
@@ -677,6 +810,13 @@ class FakeBackend(Backend):
     def _clip_put(self, kind, data):
         self.clip = (kind, data)
         self.posted.append(("clip", kind))
+
+    def _clip_files_get(self):
+        return list(self.files_clip)
+
+    def _clip_files_put(self, paths):
+        self.files_clip = list(paths)
+        self.posted.append(("clip_files", tuple(paths)))
 
     def sas(self):
         self.posted.append(("sas",))

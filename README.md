@@ -20,10 +20,14 @@ Copy on one, paste on the other. Send files across. No account, no cloud.</p>
 - **Admin prompts and the sign-in screen (Windows).** The setup installs the Kvm service, so your Mac's keyboard
   and mouse also work on UAC prompts, the lock screen and the sign-in screen after a restart. Ctrl+Alt+Del works too.
 - **Shortcuts feel native.** ⌘C on the Mac is Ctrl+C on the PC (switchable). Media and volume keys carry over.
-- **Shared clipboard:** text and pictures, both ways.
+- **Shared clipboard:** text and pictures, both ways, as soon as you copy or only when the pointer moves over. Passwords
+  copied from a password manager are skipped, long text has a size limit, and the last few items are listed in
+  Clipboard (kept in memory only).
+- **Copy and paste files** between computers: select files, press Ctrl+Alt+C (⌃⌥C on a Mac), then paste on the other
+  computer with ⌘V / Ctrl+V or Ctrl+Alt+V.
 - **Send files and folders** both ways: drop them on a computer in the Kvm window, or use Send files.
 - **See and control the other screen** in a Kvm window: click and type on it from there, including on Windows admin
-  prompts and the sign-in screen. Each computer chooses whether it shares its screen (Settings › Sharing), and shows
+  prompts and the sign-in screen. Each computer chooses whether it shares its screen (Screen & sound), and shows
   who is looking.
 - **Hear the other computer** on this one's speakers or headphones (the speaker button next to it), and **use this
   computer's microphone there** (the mic button): apps on that computer pick "CABLE Output" (Windows, with the free
@@ -41,7 +45,10 @@ Copy on one, paste on the other. Send files across. No account, no cloud.</p>
 - **Ring, lock or sleep** the other computer.
 - **Cursor lock** (F14 on a Mac keyboard, Scroll Lock on a PC) keeps the pointer where it is, **hold a key to cross**
   makes edges cross only while a key is held, and <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Esc</kbd> brings the pointer
-  home from anywhere.
+  home from anywhere. So does **shaking the mouse** left and right, if you turn it on.
+- **Sharing hotkey:** double-tap Right Shift (or another key you pick) to turn sharing on or off. Each direction can be
+  switched off on its own, the edge can take a firmer push to cross, and scrolling from the other computer can be
+  reversed.
 - **Updates itself** from GitHub Releases, like every PXL app.
 
 ## Install

@@ -80,6 +80,10 @@ class Agent(object):
         self._side = None
         self._locked = False
         self._acc = [0.0, 0.0]
+        self._shake = []                   # recent (time, direction) of big sideways moves while driving
+        self._last_peer = None             # the computer we last moved to or from
+        self._clip_pending = None          # "When you switch": the copy waiting for a switch
+        self._clips = []                   # recent clipboard items, newest first (memory only)
         self._pairing = None               # dict describing the pairing in progress
         self._pair_code_event = threading.Event()
         self._transfers = {}               # tid -> dict
@@ -201,7 +205,7 @@ class Agent(object):
                 "transfers": sorted(self._transfers.values(), key=lambda t: -t["started"])[:20],
                 "qr": bool(self._qr and time.time() < self._qr["until"]),
                 "settings": self._store.settings(), "receive_dir": self._store.receive_dir(self._home_dir),
-                "notices": list(self._notices[-10:]), "permissions": self._backend.permissions(),
+                "notices": list(self._notices[-10:]), "clips": [dict(c) for c in self._clips], "permissions": self._backend.permissions(),
                 "backend": self._backend.name, "capture": self._backend.can_capture,
                 "discovery": bool(self._disc and self._disc.available),
                 "views": {pid: {k: v[k] for k in ("phase", "error", "w", "h", "seq", "control", "url")}
@@ -229,6 +233,8 @@ class Agent(object):
         self._store.set(key, value)
         if key == "screen_share" and not value:
             self.stop_sharing()
+        if key == "share_out" and not value and self._mode == "driving":
+            self.go_home()
         if key == "sound_share" and not value:
             for pid in list(self._listeners):
                 self._drop_listener(pid, why="stopped")
@@ -255,6 +261,20 @@ class Agent(object):
         if p and p.main:
             p.main.msg({"t": "layout", "side": OPPOSITE.get(side) if side else None})
         self._configure_backend()
+        return True
+
+    def clip_use(self, i):
+        """Put a recent clipboard item back on this computer's clipboard."""
+        with self._lock:
+            c = self._clips[i] if 0 <= i < len(self._clips) else None
+        if not c or c.get("kind") != "text":
+            return False
+        self._backend.handle({"c": "clip_set", "kind": "text", "data": c["data"]})
+        return True
+
+    def clip_clear(self):
+        with self._lock:
+            self._clips = []
         return True
 
     def set_layout(self, pid, items):
@@ -547,7 +567,7 @@ class Agent(object):
         return self._locked
 
     # ---- files -------------------------------------------------------------------
-    def send_files(self, pid, paths):
+    def send_files(self, pid, paths, clip=False):
         p = self._peers.get(pid)
         if not (p and p.main and not p.main.closed):
             return None
@@ -576,7 +596,7 @@ class Agent(object):
         names = sorted({i["rel"].split("/")[0] for i in items})
         t = {"id": tid, "dir": "out", "peer": pid, "peer_name": self._peer_name(pid), "count": len(items),
              "total": total, "done": 0, "phase": "sending", "started": time.time(), "error": None,
-             "label": names[0] if len(names) == 1 else "%d items" % len(names)}
+             "label": names[0] if len(names) == 1 else "%d items" % len(names), "clip": bool(clip)}
         with self._lock:
             self._transfers[tid] = t
         threading.Thread(target=self._send_files, args=(p, tid, items), daemon=True).start()
@@ -605,7 +625,7 @@ class Agent(object):
         t = self._transfers[tid]
         link = p.bulk if (p.bulk and not p.bulk.closed) else p.main
         try:
-            link.msg({"t": "files", "tid": tid, "from": self._store.name, "label": t["label"],
+            link.msg({"t": "files", "tid": tid, "from": self._store.name, "label": t["label"], "clip": t.get("clip", False),
                       "items": [{"i": n, "rel": it["rel"], "size": it["size"]} for n, it in enumerate(items)]})
             for n, it in enumerate(items):
                 h = hashlib.sha256()
@@ -642,7 +662,7 @@ class Agent(object):
         taken = {}
         for name in top:
             taken[name] = _unique(dest, name)
-        state = {"dest": dest, "items": {}, "top": taken}
+        state = {"dest": dest, "items": {}, "top": taken, "clip": bool(m.get("clip"))}
         for it in m["items"]:
             parts = [x for x in it["rel"].split("/") if x not in ("", ".", "..")]
             if not parts:
@@ -706,7 +726,13 @@ class Agent(object):
 
     def _on_files_done(self, m):
         t = self._transfers.get(m.get("tid"))
-        self._incoming.pop(m.get("tid"), None)
+        st = self._incoming.pop(m.get("tid"), None)
+        if t and t["phase"] == "receiving" and st and st.get("clip"):
+            # Ctrl+Alt+C on the other computer: the files go on this clipboard, ready to paste.
+            t["phase"] = "received"
+            self._backend.handle({"c": "clip_files", "paths": [os.path.join(st["dest"], n) for n in st["top"].values()]})
+            self._notice("%s from %s is ready to paste" % (t["label"], t["peer_name"]))
+            return
         if t and t["phase"] == "receiving":
             t["phase"] = "received"
             self._notice("%s sent %s" % (t["peer_name"], t["label"]))
@@ -1584,7 +1610,7 @@ class Agent(object):
             return
         if t == "enter":
             with self._lock:
-                if self._mode == "driving":
+                if self._mode == "driving" or not self._store.get("accept_in"):
                     link.msg({"t": "busy"})
                     return
                 side = m.get("side")
@@ -1636,6 +1662,16 @@ class Agent(object):
                     data = b64e(m["_data"])
                 if data is not None:
                     self._backend.handle({"c": "clip_set", "kind": m.get("kind"), "data": data})
+                    self._remember_clip(m.get("kind"), data, self._peer_name(pid))
+            return
+        if t == "copy_files":
+            # Ctrl+Alt+C typed on that computer while its pointer was here: copy what's selected here, for it.
+            if self._store.get("file_keys"):
+                self._backend.handle({"c": "copy_files", "req": pid})
+            return
+        if t == "paste":
+            if self._store.get("file_keys"):
+                self._backend.handle({"c": "paste"})
             return
         if t == "action":
             a = m.get("a")
@@ -1687,6 +1723,9 @@ class Agent(object):
     def _on_backend(self, ev, forced=False):
         t = ev.get("t")
         if t == "move":
+            if self._mode == "driving" and self._store.get("shake_home") and self._shaken(ev["dx"]):
+                self.go_home()
+                return
             with self._lock:
                 if self._mode != "driving":
                     return
@@ -1715,6 +1754,8 @@ class Agent(object):
             self._on_cross(ev["side"], ev.get("frac", 0.5), ev.get("x"), ev.get("y"))
             return
         if t == "exit":
+            if self._mode == "driven":
+                self._flush_clip(self._active)
             with self._lock:
                 if self._mode == "driven":
                     link = self._active_link()
@@ -1742,17 +1783,53 @@ class Agent(object):
                 return
             if ev["kind"] == "png" and not self._store.get("clipboard_images"):
                 return
-            for p in list(self._peers.values()):
-                if not (p.main and not p.main.closed):
-                    continue
-                if ev["kind"] == "text" and len(ev["data"]) < 200000:
-                    p.main.msg({"t": "clip", "kind": "text", "data": ev["data"]})
-                else:
-                    link = p.bulk if (p.bulk and not p.bulk.closed) else p.main
-                    if ev["kind"] == "png":
-                        link.blob({"t": "clip", "kind": "png"}, b64d(ev["data"]))
-                    else:
-                        link.msg({"t": "clip", "kind": "text", "data": ev["data"]})
+            if ev["kind"] == "text" and len(ev["data"].encode("utf-8")) > int(self._store.get("clip_max_kb") or 256) * 1024:
+                return
+            self._remember_clip(ev["kind"], ev["data"], None)
+            if self._store.get("clip_mode") == "switch":
+                with self._lock:
+                    self._clip_pending = ev  # goes when the pointer moves to another computer
+                return
+            self._send_clip(ev)
+            return
+        if t == "toggle_share":
+            on = not self._store.get("share_out")
+            self.set_setting("share_out", on)
+            self._notice("Sharing this keyboard and mouse is %s" % ("on" if on else "off"))
+            self._backend.handle({"c": "action", "a": "notify", "title": "Kvm",
+                                  "text": "Keyboard and mouse sharing is %s" % ("on" if on else "off")})
+            return
+        if t == "copy_files":
+            if not self._store.get("file_keys"):
+                return
+            with self._lock:
+                link = self._active_link() if (ev.get("grabbed") and self._mode == "driving") else None
+                target = self._last_peer if self._last_peer in self._peers else None
+                if not target:
+                    live = [pid for pid, p in self._peers.items() if p.main and not p.main.closed and not self._is_phone(pid)]
+                    target = live[0] if len(live) == 1 else None
+            if link:
+                link.msg({"t": "copy_files"})
+            elif target:
+                self._backend.handle({"c": "copy_files", "req": target})
+            else:
+                self._notice("Move the pointer to the other computer once, then copy the files again.")
+            return
+        if t == "paste_files":
+            with self._lock:
+                link = self._active_link() if (ev.get("grabbed") and self._mode == "driving") else None
+            if link:
+                link.msg({"t": "paste"})
+            else:
+                self._backend.handle({"c": "paste"})
+            return
+        if t == "files_copied":
+            pid, paths = ev.get("req"), ev.get("paths") or []
+            if not paths:
+                self._notice("Nothing to copy: select files or folders first, then press Ctrl+Alt+C.")
+                return
+            if self.send_files(pid, paths, clip=True):
+                self._notice("Copying %s to %s" % (_count(paths), self._peer_name(pid)))
             return
         if t == "screens":
             self._screens = ev.get("rects") or []
@@ -1792,6 +1869,39 @@ class Agent(object):
         if t == "log":
             self._log(ev.get("text"))
 
+    def _send_clip(self, ev, pids=None):
+        for pid, p in list(self._peers.items()):
+            if not (p.main and not p.main.closed) or (pids is not None and pid not in pids):
+                continue
+            if ev["kind"] == "text" and len(ev["data"]) < 200000:
+                p.main.msg({"t": "clip", "kind": "text", "data": ev["data"]})
+            else:
+                link = p.bulk if (p.bulk and not p.bulk.closed) else p.main
+                if ev["kind"] == "png":
+                    link.blob({"t": "clip", "kind": "png"}, b64d(ev["data"]))
+                else:
+                    link.msg({"t": "clip", "kind": "text", "data": ev["data"]})
+
+    def _flush_clip(self, pid):
+        """"When you switch": the pointer is moving to `pid`, so it gets what was copied here."""
+        with self._lock:
+            ev, self._clip_pending = self._clip_pending, None
+        if ev and pid:
+            self._send_clip(ev, [pid])
+
+    def _remember_clip(self, kind, data, source):
+        n = int(self._store.get("clip_recent") or 0)
+        if n <= 0:
+            return
+        if kind == "text":
+            item = {"kind": "text", "data": data[:20000], "from": source, "ts": time.time()}
+        else:
+            item = {"kind": "png", "data": None, "from": source, "ts": time.time()}
+        with self._lock:
+            self._clips = [c for c in self._clips if not (kind == "text" and c.get("data") == item["data"])]
+            self._clips.insert(0, item)
+            del self._clips[n:]
+
     def _on_cross(self, side, frac, x=None, y=None):
         with self._lock:
             pid, enter = self._peer_at(side), None
@@ -1814,6 +1924,7 @@ class Agent(object):
             msg = {"t": "enter", "side": OPPOSITE[side], "frac": frac, "locked": self._locked}
             msg.update(enter or {})
             p.main.msg(msg)
+        self._flush_clip(pid)
 
     def _layout(self, pid):
         """Where each screen of another computer sits in our coordinates, or None (not on the desk,
@@ -1861,6 +1972,20 @@ class Agent(object):
                     self._store.update_pair(other, side=None)
         self._store.update_pair(pid, side=side, layout=items, layout_ts=ts)
 
+    def _shaken(self, dx):
+        """Shaking the mouse left and right (four quick turns) brings the pointer home."""
+        if abs(dx) < 12:
+            return False
+        now, d = time.time(), 1 if dx > 0 else -1
+        sh = [x for x in self._shake if now - x[0] < 0.7]
+        if not sh or sh[-1][1] != d:
+            sh.append((now, d))
+        self._shake = sh
+        if len(sh) >= 5:
+            self._shake = []
+            return True
+        return False
+
     def _leave_driving(self, recall):
         link = self._active_link()
         if link and recall:
@@ -1879,6 +2004,8 @@ class Agent(object):
 
     # ==== helpers ====================================================================
     def _set_mode(self, mode, pid=None, side=None):
+        if mode != "home" and pid:
+            self._last_peer = pid
         self._mode = mode
         self._active = pid if mode != "home" else None
         self._side = side if mode != "home" else None
@@ -1909,7 +2036,12 @@ class Agent(object):
                 sides.append(rec["side"])
                 targets += [geo.placed(i) for i in self._layout(pid) or []]
         s = self._store
+        if not s.get("share_out"):
+            sides, targets = [], []
         self._backend.handle({"c": "config", "sides": sides, "targets": targets, "cross_mod": s.get("cross_modifier"),
+                              "share_out": bool(s.get("share_out")), "edge_resistance": s.get("edge_resistance") or 0,
+                              "reverse_scroll": bool(s.get("reverse_scroll")), "toggle_key": s.get("toggle_key") or "",
+                              "file_keys": bool(s.get("file_keys")), "clipboard_secrets": bool(s.get("clipboard_secrets")),
                               "return_hotkey": s.get("return_hotkey"), "lock_key": s.get("lock_key"),
                               "clipboard": bool(s.get("clipboard") and any(p.main for p in self._peers.values())),
                               "clipboard_images": bool(s.get("clipboard_images"))})
@@ -2022,3 +2154,7 @@ def _clean_layout(items):
     except (KeyError, TypeError, ValueError, IndexError):
         return []
     return out[:16]
+
+
+def _count(paths):
+    return os.path.basename(paths[0].rstrip("\\/")) if len(paths) == 1 else "%d items" % len(paths)
