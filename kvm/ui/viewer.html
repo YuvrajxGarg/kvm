@@ -26,6 +26,11 @@
     .msg { position: fixed; inset: 40px 0 0 0; display: grid; place-items: center; text-align: center; color: var(--text2); padding: 24px; }
     .msg b { display: block; color: var(--text); font-size: 15px; margin-bottom: 6px; }
     .hidden { display: none !important; }
+    /* As another computer's extra display: full screen, the bar only while the pointer is at the top. */
+    body.display .bar { transform: translateY(-100%); transition: transform .18s ease; }
+    body.display.peek .bar { transform: none; }
+    body.display .stage { top: 0; }
+    body.display .msg { inset: 0; }
   </style>
 </head>
 <body>
@@ -34,13 +39,22 @@
     <span class="spacer"></span>
     <button id="ctl" title="Use the mouse and keyboard on this screen">Control</button>
     <button id="cad" title="Send Ctrl+Alt+Del">Ctrl+Alt+Del</button>
+    <button id="end" class="hidden" title="Stop being a display for this computer">Stop</button>
   </div>
   <div class="stage"><img id="screen" alt=""></div>
   <div class="msg" id="msg"><div><b>Waiting for the screen</b><span>It shows here as soon as the other computer sends it.</span></div></div>
   <script>
   (() => {
     'use strict';
-    const pid = new URLSearchParams(location.search).get('pid');
+    const qs = new URLSearchParams(location.search);
+    const pid = qs.get('pid');
+    const asDisplay = qs.get('display') === '1';
+    if (asDisplay) {
+      document.body.classList.add('display');
+      document.getElementById('end').classList.remove('hidden');
+      document.getElementById('msg').querySelector('b').textContent = 'Waiting for the display';
+      window.addEventListener('mousemove', (e) => document.body.classList.toggle('peek', e.clientY < 6 || (e.clientY < 46 && document.body.classList.contains('peek'))));
+    }
     const img = document.getElementById('screen');
     const $ = (id) => document.getElementById(id);
     let api = null, view = null, control = true, url = null, moved = null, raf = 0, gotFrame = false, polling = false;
@@ -102,6 +116,7 @@
       held.clear();
     });
 
+    $('end').addEventListener('click', () => api.close_display(pid));
     $('ctl').addEventListener('click', () => { control = !control; render(); $('ctl').blur(); });
     $('cad').addEventListener('click', () => {
       for (const c of ['ControlLeft', 'AltLeft', 'Delete']) send({ k: 'key', code: c, d: true });
@@ -132,7 +147,7 @@
       try {
         const s = await api.viewer_state(pid);
         view = s.view;
-        if (s.name) { $('name').textContent = s.name; document.title = s.name + ' · Kvm'; }
+        if (s.name) { $('name').textContent = s.name + (asDisplay ? ' display' : ''); document.title = s.name + (asDisplay ? ' display' : '') + ' · Kvm'; }
         if (view && view.url && view.url !== url) { url = view.url; gotFrame = false; img.src = url; }
         render();
       } catch (e) { /* keep trying */ }

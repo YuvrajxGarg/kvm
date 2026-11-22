@@ -174,6 +174,51 @@ class Api(object):
         win.events.closed += closed
         return {"ok": True}
 
+    def extend(self, pid, on):
+        """Use that computer's screen as an extra display for this one (on=True), or stop."""
+        return self._call("extend_start" if on else "extend_stop", pid)
+
+    def open_display(self, pid):
+        """Show another computer's extra display full screen here (it asked to extend onto this one)."""
+        key = "display:" + pid
+        if key in self._viewers:
+            return {"ok": True}
+        name = "the other computer"
+        try:
+            for p in (self._agent.status() or {}).get("peers", []):
+                if p.get("id") == pid:
+                    name = p.get("name") or name
+        except Exception:
+            pass
+        # On the biggest screen that isn't the main one (the external monitor), else the main one.
+        screen = None
+        try:
+            screens = list(webview.screens)
+            others = screens[1:] or screens
+            screen = max(others, key=lambda s: s.width * s.height) if others else None
+        except Exception:
+            pass
+        kw = {"screen": screen} if screen is not None else {}
+        win = webview.create_window("%s display · Kvm" % name,
+                                    url=os.path.join(UI_DIR, "viewer.html") + "?pid=" + pid + "&display=1",
+                                    js_api=self, fullscreen=True, background_color="#000000", **kw)
+        self._viewers[key] = win
+
+        def closed():
+            self._viewers.pop(key, None)
+            self._call("extend_end", pid)
+        win.events.closed += closed
+        return {"ok": True}
+
+    def close_display(self, pid):
+        win = self._viewers.pop("display:" + pid, None)
+        if win:
+            try:
+                win.destroy()
+            except Exception:
+                pass
+        return True
+
     def viewer_state(self, pid):
         try:
             st = self._agent.status() if self._agent else None

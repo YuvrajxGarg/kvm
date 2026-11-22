@@ -226,6 +226,35 @@ class TwoComputers(unittest.TestCase):
         self.assertTrue(wait(lambda: self.mac.status()["sound"]["hear"][self.pc_id]["phase"] == "refused"))
         self.assertIn("doesn't share its sound", self.mac.status()["sound"]["hear"][self.pc_id]["error"])
 
+    def test_extend_the_mac_onto_the_pc(self):
+        self.assertTrue(wait(lambda: any(p.get("screens") for p in self.mac.status()["peers"])))
+        self.mac.extend_start(self.pc_id)
+        # The Mac gets an extra display the size of the PC's biggest monitor, to the right of its own.
+        self.assertTrue(wait(lambda: self.mac.status()["extend"]["out"][self.pc_id]["phase"] == "live"))
+        self.assertIn(("vdisplay", True), self.mac_be.posted)
+        self.assertEqual(self.mac_be._vrect, (1440.0, 0.0, 2560.0, 1440.0))
+        # The PC shows just that display, full size.
+        self.assertTrue(wait(lambda: self.pc.status()["extend"]["in"] and self.pc.status()["extend"]["in"][0]["id"] == self.mac_id))
+        self.assertTrue(wait(lambda: (self.pc.status()["views"].get(self.mac_id) or {}).get("seq", 0) > 0))
+        v = self.pc.status()["views"][self.mac_id]
+        self.assertEqual((v["w"], v["h"]), (2560, 1440))
+        # A click in the middle of it lands in the middle of the extra display.
+        self.pc.view_input(self.mac_id, {"k": "abs", "x": 0.5, "y": 0.5})
+        self.assertTrue(wait(lambda: any(e[0] == "move" and abs(e[1] - 2720) < 1 and abs(e[2] - 720) < 1
+                                         for e in self.mac_be.posted)))
+        # It carries on through a dropped connection.
+        self.mac._peers[self.pc_id].main.close()
+        self.assertTrue(wait(lambda: any(p["connected"] for p in self.mac.status()["peers"] if p["id"] == self.pc_id), 15))
+        seq = self.pc.status()["views"][self.mac_id]["seq"]
+        self.assertTrue(wait(lambda: self.pc.status()["views"][self.mac_id]["seq"] > seq + 2, 15))
+        self.assertEqual(self.mac.status()["extend"]["out"][self.pc_id]["phase"], "live")
+        self.assertTrue(self.pc.status()["extend"]["in"])
+        # Closing it on the PC removes the Mac's extra display.
+        self.pc.extend_end(self.mac_id)
+        self.assertTrue(wait(lambda: ("vdisplay", False) in self.mac_be.posted))
+        self.assertTrue(wait(lambda: not self.mac.status()["extend"]["out"]))
+        self.assertFalse(self.pc.status()["extend"]["in"])
+
     def test_reconnects_after_restart(self):
         self.pc.stop()
         self.assertTrue(wait(lambda: not any(p["connected"] for p in self.mac.status()["peers"])))

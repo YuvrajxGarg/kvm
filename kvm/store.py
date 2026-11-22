@@ -30,11 +30,12 @@ DEFAULTS = {
     "screen_control": True,       # ... and use it with their mouse and keyboard from the viewer
     "sound_share": True,          # paired computers may hear this computer's sound
     "mic_accept": True,           # paired computers may send their microphone to this one's virtual mic
+    "display_accept": True,       # paired computers may use this screen as an extra display
 }
 SETTING_TYPES = {"clipboard": bool, "clipboard_images": bool, "swap_cmd_ctrl": bool, "cross_modifier": str,
                  "return_hotkey": str, "lock_key": str, "speed": float, "receive_dir": str, "files": bool,
                  "remote_actions": bool, "screen_share": bool, "screen_control": bool,
-                 "sound_share": bool, "mic_accept": bool}
+                 "sound_share": bool, "mic_accept": bool, "display_accept": bool}
 
 
 def user_data_dir():

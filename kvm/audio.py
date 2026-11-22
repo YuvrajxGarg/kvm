@@ -94,21 +94,26 @@ def find_virtual_mic(speakers):
     return None
 
 
-def tap_path():
-    """The macOS system-sound tool, next to the app's other files or in a source checkout."""
+def native_tool(name):
+    """One of Kvm's small macOS tools, next to the app's other files or in a source checkout."""
     here = os.path.dirname(os.path.abspath(__file__))
     cands = []
     if getattr(sys, "_MEIPASS", None):
-        cands.append(os.path.join(sys._MEIPASS, "kvm-audiotap"))
+        cands.append(os.path.join(sys._MEIPASS, name))
     if getattr(sys, "frozen", False):
         exe = os.path.dirname(sys.executable)
-        cands += [os.path.join(exe, "kvm-audiotap"), os.path.join(exe, "..", "Frameworks", "kvm-audiotap"),
-                  os.path.join(exe, "..", "Resources", "kvm-audiotap")]
-    cands += [os.path.join(here, "..", "native-build", "kvm-audiotap")]
+        cands += [os.path.join(exe, name), os.path.join(exe, "..", "Frameworks", name),
+                  os.path.join(exe, "..", "Resources", name)]
+    cands += [os.path.join(here, "..", "native-build", name)]
     for c in cands:
         if os.path.isfile(c) and os.access(c, os.X_OK):
             return os.path.abspath(c)
     return None
+
+
+def tap_path():
+    """The macOS system-sound tool."""
+    return native_tool("kvm-audiotap")
 
 
 def _mac_version():
