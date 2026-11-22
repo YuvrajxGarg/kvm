@@ -32,6 +32,10 @@ Copy on one, paste on the other. Send files across. No account, no cloud.</p>
   the PC's own mouse and keyboard work on it too. Close it on the PC, or press Stop on the Mac, to end it.
 - **Use the Mac's camera on the PC** (… › Use *Mac*'s camera): it shows in a Kvm window on the PC, and on Windows 11
   apps (Zoom, Teams, the Camera app, browsers) can pick **Kvm Camera** as their webcam while that window is open.
+- **Your Android phone** (Kvm for Android, `Kvm-Android.apk`): pair it by scanning a QR code (Phones › Pair a phone).
+  Its notifications (texts, calls, app alerts) show on the computer and can be cleared from there, the clipboard goes
+  both ways, photos and files go both ways (Share › Kvm on the phone; they land in Downloads/Kvm), and either one
+  can ring the other.
 - **Ring, lock or sleep** the other computer.
 - **Cursor lock** (F14 on a Mac keyboard, Scroll Lock on a PC) keeps the pointer where it is, **hold a key to cross**
   makes edges cross only while a key is held, and <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Esc</kbd> brings the pointer
@@ -45,6 +49,7 @@ Copy on one, paste on the other. Send files across. No account, no cloud.</p>
 | **macOS 11+** | `Kvm.dmg`, drag to Applications. On first open allow **Accessibility** and **Input Monitoring** for Kvm in System Settings › Privacy & Security (and **Screen & System Audio Recording** the first time another computer views or hears the Mac, **Microphone**
 the first time you use its mic on the other computer). |
 | **Windows 10/11** | `Kvm-Setup.exe`. It asks for admin once, to install the Kvm service. |
+| **Android 10+** | `Kvm-Android.apk` (allow installing from your browser once). Open it, tap **Scan the code**, then allow Notification access and background use when it asks. It updates itself from the same releases. |
 
 Downloads: [latest release](https://github.com/YuvrajxGarg/kvm/releases/latest) or [kvm.pxlvzn.in](https://kvm.pxlvzn.in).
 The apps aren't code-signed: on a Mac right-click › Open the first time; on Windows choose *More info › Run anyway*.
@@ -89,15 +94,20 @@ kvm/ui/             the window (open index.html?demo in a browser for a preview)
 Develop: `pip install -r requirements.txt`, `python Kvm.py` (window), `python Kvm.py run` (no window),
 `python -m unittest discover tests`.
 
+The Android app is in `android/`: `core` is plain Kotlin (pairing, the sealed link, files) with JVM tests that check
+it against the same numbers as the Python (`KVM_CORE_ONLY=1 gradle -p android :core:test`), and `app` is the app
+(`gradle -p android :app:assembleRelease`, needs the Android SDK).
+
 ## Roadmap
 
 Kvm is growing towards everything [TwinDesk](https://github.com/InukaAsith/TwinDesk) does, in phases:
 
 1. **Done:** keyboard and mouse across Mac and Windows (including admin prompts and the sign-in screen), clipboard
    with pictures, files, ring, lock and sleep, seeing and controlling the other screen, its sound and microphone,
-   and the PC as an extra display for the Mac.
-2. Extended display the other way (a PC extending onto a Mac needs a Windows display driver), and camera.
-3. Android: a phone as a full peer (calls, texts, notifications, photos, its screen).
+   the PC as an extra display for the Mac, the Mac's camera as a webcam on the PC, and Android phones (notifications,
+   clipboard, photos and files, ring).
+2. Extended display the other way (a PC extending onto a Mac needs a Windows display driver).
+3. Android: answering texts and calls from the computer, and the phone's screen.
 4. iPhone through the browser, AirPlay receiver on Windows, continue-where-you-left-off, many devices at once, Linux.
 
 Kvm is its own code. It was inspired by TwinDesk (GPL-3.0) and shares no code with it.

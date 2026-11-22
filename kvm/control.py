@@ -18,7 +18,8 @@ METHODS = {"status", "rename", "set_setting", "set_side", "forget", "add_address
            "view_start", "view_stop", "view_input", "stop_sharing",
            "listen_start", "listen_stop", "mic_start", "mic_stop", "stop_sound",
            "extend_start", "extend_stop", "extend_end",
-           "camera_start", "camera_stop", "stop_camera"}
+           "camera_start", "camera_stop", "stop_camera",
+           "pair_phone", "pair_phone_cancel", "notif_dismiss"}
 
 
 def token_dir():

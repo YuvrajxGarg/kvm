@@ -7,6 +7,7 @@ there injection follows Windows to whichever desktop has input, so admin prompts
 sign-in and lock screens take the mouse and keyboard too.
 """
 
+import os
 import ctypes
 import queue
 import threading
@@ -440,6 +441,8 @@ class WinBackend(Backend):
             user32.LockWorkStation()
         elif what == "sleep":
             ctypes.windll.powrprof.SetSuspendState(False, False, False)
+        elif what == "notify":
+            _toast(cmd.get("title") or "Kvm", cmd.get("text") or "")
 
     def sas(self):
         if self._secure:
@@ -561,3 +564,32 @@ def restore_cursors():
     global _cursors_hidden
     user32.SystemParametersInfoW(0x57, 0, None, 0)  # SPI_SETCURSORS: reload the user's cursors
     _cursors_hidden = False
+
+
+_TOAST_PS = r"""
+$ErrorActionPreference = 'Stop'
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
+[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] > $null
+$t = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:KVM_T))
+$b = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:KVM_B))
+$x = New-Object Windows.Data.Xml.Dom.XmlDocument
+$x.LoadXml('<toast><visual><binding template="ToastGeneric"><text></text><text></text></binding></visual></toast>')
+$n = $x.GetElementsByTagName('text'); $n.Item(0).InnerText = $t; $n.Item(1).InnerText = $b
+$id = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($id).Show([Windows.UI.Notifications.ToastNotification]::new($x))
+"""
+
+
+def _toast(title, text):
+    """A Windows notification (a phone's notification, a file that arrived). Text goes through the
+    environment, never the command line, so nothing in it can run."""
+    import base64
+    import subprocess
+    env = dict(os.environ, KVM_T=base64.b64encode(title.encode("utf-8")).decode(),
+               KVM_B=base64.b64encode(text.encode("utf-8")).decode())
+    try:
+        subprocess.Popen(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", _TOAST_PS],
+                         env=env, creationflags=0x08000000, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+    except Exception:
+        pass

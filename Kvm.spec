@@ -13,7 +13,7 @@ datas += [
     (os.path.join(root, "kvm", "ui"), os.path.join("kvm", "ui")),
     (os.path.join(root, "VERSION"), "."),
 ]
-hiddenimports += ["certifi", "kvm.platform.base", "kvm.viewserver", "kvm.audio", "PIL.Image", "PIL.ImageDraw", "PIL.JpegImagePlugin"]
+hiddenimports += ["certifi", "segno", "kvm.platform.base", "kvm.viewserver", "kvm.audio", "PIL.Image", "PIL.ImageDraw", "PIL.JpegImagePlugin"]
 for pkg in ("nacl", "spake2", "zeroconf", "soundcard"):
     d, b, h = collect_all(pkg)
     datas += d

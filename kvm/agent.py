@@ -13,6 +13,7 @@ talks to it through control.py. All its public methods are what the window can c
 """
 
 import hashlib
+import hmac
 import os
 import socket
 import threading
@@ -28,11 +29,21 @@ PIECE = 512 * 1024
 PAIR_TIMEOUT = 120
 PING_EVERY = 1.0
 DEAD_AFTER = 6.0
+PHONES = ("android", "ios")
+PHONE_PING_EVERY = 10      # in PING_EVERY ticks: phones sleep, so they're pinged less often
+PHONE_DEAD_AFTER = 45.0
+QR_TTL = 300
+MAX_NOTIFS = 50
 
 
 def b64e(b):
     import base64
     return base64.b64encode(b).decode("ascii")
+
+
+def b64url(b):
+    import base64
+    return base64.urlsafe_b64encode(b).decode("ascii").rstrip("=")
 
 
 def b64d(s):
@@ -90,6 +101,8 @@ class Agent(object):
         self._extend_in = {}               # pid -> {"w", "h"}: that computer's extra display shows here
         self._vrect = None                 # where our extra display is on our desktop
         self._cam_watchers = set()         # pids using our camera
+        self._qr = None                    # {"secret", "until"}: the phone pairing QR on screen
+        self._phones = {}                  # pid -> {"battery", "charging", "notifs": [...]}
 
     # ==== lifecycle ==============================================================
     def start(self):
@@ -163,6 +176,8 @@ class Agent(object):
                     "paired": True, "connected": connected, "online": connected or pid in self._nearby,
                     "side": rec.get("side"), "host": rec.get("host"), "version": p.version if p else None,
                     "screens": p.screens if p else None,
+                    "phone": dict(self._phones.get(pid) or {}, notifs=list((self._phones.get(pid) or {}).get("notifs") or []))
+                    if rec.get("platform") in PHONES else None,
                 })
                 seen.add(pid)
             for pid, rec in list(self._nearby.items()) + list(self._manual.items()):
@@ -182,6 +197,7 @@ class Agent(object):
                 "mode": self._mode, "active": self._active, "side": self._side, "locked": self._locked,
                 "peers": peers, "pairing": pairing,
                 "transfers": sorted(self._transfers.values(), key=lambda t: -t["started"])[:20],
+                "qr": bool(self._qr and time.time() < self._qr["until"]),
                 "settings": self._store.settings(), "receive_dir": self._store.receive_dir(self._home_dir),
                 "notices": list(self._notices[-10:]), "permissions": self._backend.permissions(),
                 "backend": self._backend.name, "capture": self._backend.can_capture,
@@ -241,6 +257,7 @@ class Agent(object):
         with self._lock:
             p = self._peers.pop(pid, None)
             self._store.forget(pid)
+            self._phones.pop(pid, None)
         if p:
             for l in (p.main, p.bulk, p.media):
                 if l:
@@ -380,6 +397,87 @@ class Agent(object):
             self._notice("Paired with %s" % (hello.get("name") or "a computer"))
         except (PairError, OSError, LinkClosed, ValueError, KeyError) as e:
             self._pair_failed(str(e) if isinstance(e, PairError) else "Pairing stopped: %s" % e)
+
+    # ---- phones ------------------------------------------------------------------
+    def pair_phone(self):
+        """A QR code for the Kvm phone app to scan. It pairs one phone, within QR_TTL seconds."""
+        import segno
+        from urllib.parse import urlencode
+
+        secret = os.urandom(32)
+        until = time.time() + QR_TTL
+        with self._lock:
+            self._qr = {"secret": secret, "until": until}
+        addrs = _cached_addresses() or _lan_addresses()
+        uri = "kvm://pair?" + urlencode({"v": 1, "id": self._store.id, "n": self._store.name, "h": ",".join(addrs),
+                                         "p": self._port, "s": b64url(secret)})
+        svg = segno.make(uri, error="m").svg_inline(scale=5, border=2, dark="#111", light="#fff", omitsize=True)
+        return {"uri": uri, "svg": svg, "until": until, "addresses": addrs}
+
+    def pair_phone_cancel(self):
+        with self._lock:
+            self._qr = None
+        return True
+
+    def _pair_qr(self, sock, hello):
+        pid = hello["id"]
+        name = (hello.get("name") or "Phone")[:60]
+        with self._lock:
+            offer = self._qr if self._qr and time.time() < self._qr["until"] else None
+            if offer and hmac.compare_digest(crypto.qr_proof(offer["secret"], b"phone", pid), b64d(hello.get("proof") or "")):
+                self._qr = None  # one phone per code
+            else:
+                offer = None
+        if not offer:
+            write_json(sock, {"t": "pair_err", "why": "expired"})
+            return
+        plat = hello.get("platform") if hello.get("platform") in PHONES else "android"
+        self._store.add_pair(pid, name, plat, crypto.qr_pair_key(offer["secret"]))
+        try:
+            self._store.update_pair(pid, host=sock.getpeername()[0])
+        except OSError:
+            pass
+        write_json(sock, {"t": "paired", "id": self._store.id, "name": self._store.name, "platform": this_platform(),
+                          "version": __version__, "port": self._port,
+                          "proof": b64e(crypto.qr_proof(offer["secret"], b"desktop", self._store.id))})
+        with self._lock:
+            self._pairing = {"phase": "done", "role": "responder", "peer": name, "peer_id": pid, "phone": True}
+        self._notice("Paired with %s" % name)
+
+    def notif_dismiss(self, pid, key):
+        """Clear a notification on the phone (and from the list here)."""
+        with self._lock:
+            ph = self._phones.get(pid)
+            if ph:
+                ph["notifs"] = [n for n in ph["notifs"] if n.get("key") != key]
+            p = self._peers.get(pid)
+        if p and p.main and not p.main.closed:
+            p.main.msg({"t": "notif_dismiss", "key": key})
+        return True
+
+    def _on_phone_msg(self, pid, m):
+        t = m.get("t")
+        with self._lock:
+            ph = self._phones.setdefault(pid, {"battery": None, "charging": None, "notifs": []})
+            if t == "phone":
+                ph.update(battery=m.get("battery"), charging=m.get("charging"), model=m.get("model"))
+                return
+            if t == "notif_gone":
+                ph["notifs"] = [n for n in ph["notifs"] if n.get("key") != m.get("key")]
+                return
+            n = {k: m.get(k) for k in ("key", "app", "title", "text", "ts")}
+            n["ts"] = n["ts"] or time.time()
+            fresh = not any(x.get("key") == n["key"] for x in ph["notifs"])
+            ph["notifs"] = [n] + [x for x in ph["notifs"] if x.get("key") != n["key"]]
+            del ph["notifs"][MAX_NOTIFS:]
+        if fresh and m.get("alert", True) and self._store.get("phone_notifs"):
+            title = n["app"] or self._peer_name(pid)
+            if n["title"]:
+                title = "%s: %s" % (title, n["title"])
+            self._backend.handle({"c": "action", "a": "notify", "title": title[:120], "text": (n["text"] or "")[:300]})
+
+    def _is_phone(self, pid):
+        return (self._store.pair(pid) or {}).get("platform") in PHONES
 
     # ---- the other computer ------------------------------------------------------
     def action(self, pid, what):
@@ -1191,6 +1289,10 @@ class Agent(object):
                 self._pair_responder(sock, hello)
                 sock.close()
                 return
+            if hello.get("purpose") == "pair_qr":
+                self._pair_qr(sock, hello)
+                sock.close()
+                return
             pid = hello["id"]
             key = self._store.pair_key(pid)
             if not key:
@@ -1321,13 +1423,15 @@ class Agent(object):
             now = time.time()
             for pid in list(self._store.pairs().keys()):
                 p = self._peers.get(pid)
+                phone = self._is_phone(pid)
                 if p and p.main and not p.main.closed:
-                    p.main.msg({"t": "ping"})
-                    if now - p.last_seen > DEAD_AFTER:
+                    if not phone or n % PHONE_PING_EVERY == 0:
+                        p.main.msg({"t": "ping"})
+                    if now - p.last_seen > (PHONE_DEAD_AFTER if phone else DEAD_AFTER):
                         self._log("link to %s went quiet" % pid)
                         p.main.close()
-                elif n % 3 == 0 and not (self._store.pair(pid) or {}).get("stale"):
-                    self._ensure_link(pid)
+                elif n % 3 == 0 and not phone and not (self._store.pair(pid) or {}).get("stale"):
+                    self._ensure_link(pid)  # phones dial us: they move between networks and sleep
             with self._lock:
                 if self._pairing and self._pairing.get("phase") in ("done", "failed") and \
                         now - self._pairing.get("since", now) > 30:
@@ -1486,6 +1590,9 @@ class Agent(object):
             return
         if t in ("extend", "extend_refused"):
             self._on_extend_msg(pid, link, m)
+            return
+        if t in ("phone", "notif", "notif_gone"):
+            self._on_phone_msg(pid, m)
             return
         if t in ("listen", "listen_ok", "listen_refused", "mic", "mic_ok", "mic_refused", "pcm"):
             self._on_sound_msg(pid, link, m)

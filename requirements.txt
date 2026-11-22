@@ -19,3 +19,5 @@ pyobjc-framework-ApplicationServices>=10; sys_platform == "darwin"
 pyobjc-framework-Cocoa>=10; sys_platform == "darwin"
 # Windows: the service that reaches admin prompts and the sign-in screen
 pywin32>=306; sys_platform == "win32"
+# Pairing a phone: the QR code the Kvm phone app scans
+segno>=1.6

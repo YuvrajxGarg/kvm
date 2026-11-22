@@ -121,6 +121,15 @@ class Api(object):
     def pair_cancel(self):
         return self._call("pair_cancel")
 
+    def pair_phone(self):
+        return self._call("pair_phone")
+
+    def pair_phone_cancel(self):
+        return self._call("pair_phone_cancel")
+
+    def notif_dismiss(self, pid, key):
+        return self._call("notif_dismiss", pid, key)
+
     def remote_action(self, pid, what):
         return self._call("action", pid, what)
 

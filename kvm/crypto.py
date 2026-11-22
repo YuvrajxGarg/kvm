@@ -111,3 +111,18 @@ class Opener(object):
             return _nb.crypto_aead_chacha20poly1305_ietf_decrypt(bytes(blob), None, nonce, self.key)
         except Exception:
             raise CryptoError("frame failed authentication")
+
+
+# ---- phones: pairing by QR code ---------------------------------------------
+# The computer shows a QR code holding a fresh 32-byte secret (good for one phone, for a few
+# minutes). Seeing the screen is the proof: the phone answers with an HMAC of its id under the
+# secret, the computer answers with one of its own id, and both keep a pair key made from the
+# secret. Sessions then work exactly like between two computers.
+
+def qr_proof(secret, who, ident):
+    """who is b"phone" or b"desktop"."""
+    return hmac.new(bytes(secret), who + b":" + ident.encode("utf-8"), hashlib.sha256).digest()
+
+
+def qr_pair_key(secret):
+    return hashlib.blake2b(bytes(secret), digest_size=32, person=b"kvm-qr-key").digest()

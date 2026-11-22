@@ -28,6 +28,7 @@
     speaker: '<path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/>',
     mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>',
     camera: '<path d="M3.5 8a2 2 0 0 1 2-2h8.5a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5.5a2 2 0 0 1-2-2z"/><path d="m16 10.5 4.5-3v9l-4.5-3"/>',
+    phone: '<rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M11 18.5h2"/>',
     keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M7.5 14h9"/>',
   };
   const icon = (n) => `<svg class="i" viewBox="0 0 24 24">${ICONS[n] || ''}</svg>`;
@@ -36,8 +37,9 @@
   const human = (n) => { if (!n) return '0 B'; const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0; while (n >= 1000 && i < 4) { n /= 1000; i++; } return (i ? n.toFixed(n < 10 ? 1 : 0) : n) + ' ' + u[i]; };
   const fillIcons = (root = document) => root.querySelectorAll('[data-icon]').forEach((el) => { el.outerHTML = icon(el.dataset.icon); });
   const DEMO = location.search.includes('demo');
-  const OS_ICON = { mac: 'laptop', windows: 'monitor', linux: 'monitor' };
-  const OS_NAME = { mac: 'Mac', windows: 'Windows', linux: 'Linux' };
+  const OS_ICON = { mac: 'laptop', windows: 'monitor', linux: 'monitor', android: 'phone', ios: 'phone' };
+  const OS_NAME = { mac: 'Mac', windows: 'Windows', linux: 'Linux', android: 'Android', ios: 'iPhone' };
+  const isPhone = (p) => p.platform === 'android' || p.platform === 'ios';
   const SIDE_NAME = { left: 'left', right: 'right', top: 'above', bottom: 'below' };
 
   let api = null;
@@ -101,7 +103,7 @@
       return;
     }
     const peers = a.peers || [];
-    const paired = peers.filter((p) => p.paired);
+    const paired = peers.filter((p) => p.paired && !isPhone(p));
     const active = peers.find((p) => p.id === a.active);
     const now = $('.now');
     now.classList.toggle('on', a.mode !== 'home');
@@ -126,7 +128,8 @@
     lb.classList.toggle('hidden', a.mode !== 'driving' && !a.locked);
     lb.querySelector('span').textContent = a.locked ? 'Cursor locked' : 'Cursor lock';
     renderDesk(a, paired);
-    renderPeers(a, peers);
+    renderPeers(a, peers.filter((p) => !isPhone(p)));
+    renderPhones(a, peers.filter(isPhone));
     renderTransfers(a);
     // notices from the agent (pairing done, files received, ring)
     for (const n of a.notices || []) {
@@ -274,6 +277,59 @@
     if (el.dataset.html !== html) { el.dataset.html = html; el.innerHTML = html; }
   }
 
+  function ago(ts) {
+    const s = Math.max(0, Date.now() / 1000 - ts);
+    return s < 60 ? 'now' : s < 3600 ? Math.floor(s / 60) + 'm' : s < 86400 ? Math.floor(s / 3600) + 'h' : Math.floor(s / 86400) + 'd';
+  }
+
+  function renderPhones(a, phones) {
+    const el = $('#phones');
+    const html = !phones.length
+      ? `<div class="empty">Get Kvm for Android from <a href="#" data-act="site">kvm.pxlvzn.in</a>, then pair it here to see its notifications, share the clipboard and send photos and files both ways.</div>`
+      : phones.map((p) => {
+        const ph = p.phone || {};
+        const bat = ph.battery != null ? ` · ${ph.battery}%${ph.charging ? ' charging' : ''}` : '';
+        const n = (ph.notifs || []).length;
+        return `<div class="peer-row" data-pid="${p.id}"><div class="ic">${icon('phone')}</div>
+          <div class="t"><b>${esc(p.name)}</b><span><i class="dotst ${p.connected ? 'on' : ''}"></i>${p.connected ? 'Connected' : 'Not connected · open Kvm on the phone'}${bat}</span></div>
+          <div class="acts">
+            <button class="btn-quiet" data-act="notifs" data-pid="${p.id}">${icon('bell')}<span>${n ? n + ' notification' + (n > 1 ? 's' : '') : 'Notifications'}</span></button>
+            <button class="btn-quiet" data-act="send" data-pid="${p.id}" ${p.connected ? '' : 'disabled'}>${icon('send')}<span>Send files</span></button>
+            <button class="btn-icon lg" data-act="phone-more" data-pid="${p.id}" title="More">${icon('more')}</button></div></div>`;
+      }).join('');
+    if (el.dataset.html !== html) { el.dataset.html = html; el.innerHTML = html; }
+    if (pairModal && pairModal.kind === 'notifs') renderNotifs(pairModal.pid);
+    if (pairModal && pairModal.kind === 'qr' && a.qr) pairModal.seen = true;
+    if (pairModal && pairModal.kind === 'qr' && pairModal.seen && !a.qr) {
+      const done = a.pairing && a.pairing.phone && a.pairing.phase === 'done';
+      closeModal();
+      if (!done) toast('The pairing code ran out. Show a new one to pair a phone.', true);
+    }
+  }
+
+  function renderNotifs(pid) {
+    const p = ((st.agent && st.agent.peers) || []).find((x) => x.id === pid);
+    const list = (p && p.phone && p.phone.notifs) || [];
+    const html = list.length ? list.map((n) => `<div class="notif"><div class="t"><b>${esc(n.app || '')}${n.title ? ' · ' + esc(n.title) : ''}</b>
+        <span>${esc(n.text || '')}</span></div><span class="faint">${ago(n.ts)}</span>
+        <button class="btn-icon" data-act="notif-x" data-pid="${pid}" data-key="${esc(n.key)}" title="Clear on the phone">${icon('x')}</button></div>`).join('')
+      : '<div class="empty">No notifications on the phone right now.</div>';
+    const el = $('#notif-list');
+    if (el && el.dataset.html !== html) { el.dataset.html = html; el.innerHTML = html; }
+  }
+
+  async function pairPhone() {
+    const r = await api.pair_phone();
+    if (!r) return;
+    const m = modal(`<div class="modal-title"><h2>Pair a phone</h2></div>
+      <p class="lead">Open Kvm on the phone, tap <b>Scan the code</b> and point it at this. The phone must be on the same Wi-Fi as this computer.</p>
+      <div class="qr">${r.svg}</div>
+      <p class="faint center">This code works once, for the next 5 minutes.</p>
+      <div class="foot"><button class="btn-quiet" data-act="qr-cancel">Cancel</button></div>`);
+    m.parentElement.dataset.sticky = '1';
+    pairModal = { kind: 'qr' };
+  }
+
   function renderTransfers(a) {
     const ts = a.transfers || [];
     $('#transfers-head').classList.toggle('hidden', !ts.length);
@@ -296,7 +352,7 @@
   function renderPairing(a) {
     const p = a.pairing;
     if (!p) {
-      if (pairModal && pairModal.kind !== 'address') closeModal();
+      if (pairModal && !['address', 'notifs', 'qr'].includes(pairModal.kind)) closeModal();
       return;
     }
     if (p.role === 'responder' && p.phase === 'showing') {
@@ -409,6 +465,7 @@
         ${opt('Allow control from the viewer', 'They can also click and type on it from that window.', s.screen_control, 'screen_control')}
         ${opt('Be a display for paired computers', 'A paired Mac can use this screen as an extra display. It opens full screen; close it to stop.', s.display_accept, 'display_accept')}
         ${opt('Share this computer’s camera', 'Paired computers can use it, in a Kvm window or as a webcam.', s.camera_share, 'camera_share')}
+        ${opt('Show phone notifications', 'Notifications from a paired phone also show up on this computer.', s.phone_notifs, 'phone_notifs')}
         ${opt('Share this computer’s sound', 'Paired computers can hear what plays here.', s.sound_share, 'sound_share')}
         ${opt('Take a microphone from paired computers', isMac ? 'Their microphone plays into BlackHole, so apps here can use it.' : 'Their microphone plays into VB-CABLE, so apps here can use it.', s.mic_accept, 'mic_accept')}
       </div>
@@ -464,6 +521,26 @@
       case 'close': closeModal(); break;
       case 'pair': api.pair(pid); break;
       case 'pair-cancel': api.pair_cancel(); closeModal(); break;
+      case 'qr-cancel': api.pair_phone_cancel(); closeModal(); break;
+      case 'notifs': {
+        const p = (st.agent.peers || []).find((x) => x.id === pid) || {};
+        modal(`<div class="modal-title"><h2>${esc(p.name)}</h2><span class="spacer"></span><button class="btn-icon" data-act="close">${icon('x')}</button></div>
+          <div class="notifs" id="notif-list"></div>`);
+        pairModal = { kind: 'notifs', pid };
+        renderNotifs(pid);
+        break;
+      }
+      case 'notif-x': api.notif_dismiss(pid, b.dataset.key); setTimeout(poll, 50); break;
+      case 'phone-more': {
+        const p = (st.agent.peers || []).find((x) => x.id === pid) || {};
+        openMenu(b, [
+          { icon: 'bell', label: `Ring ${p.name}`, run: () => api.remote_action(pid, 'ring') },
+          { icon: 'send', label: 'Send files…', run: () => api.send_files(pid, false) },
+          '-',
+          { icon: 'unlink', label: 'Unpair', danger: true, run: () => api.forget(pid) },
+        ]);
+        break;
+      }
       case 'send': api.send_files(pid, false); break;
       case 'view': {
         const r = await api.open_viewer(pid);
@@ -515,6 +592,7 @@
   });
   $('#open-settings').addEventListener('click', openSettings);
   $('#add-address').addEventListener('click', addByAddress);
+  $('#pair-phone').addEventListener('click', pairPhone);
   $('#home-btn').addEventListener('click', () => api.go_home());
   $('#lock-btn').addEventListener('click', () => api.set_locked(!(st.agent && st.agent.locked)));
   $('#open-received').addEventListener('click', () => st && st.agent && api.reveal(st.agent.receive_dir));
@@ -613,7 +691,10 @@
       mode: 'app', error: null,
       agent: {
         me, mode: scene === 'driving' ? 'driving' : 'home', active: scene === 'driving' ? 'pc' : null, locked: false,
-        peers: scene === 'empty' ? [] : [pc, ...(scene === 'pair' ? [] : [{ id: 'nb', name: 'Studio iMac', platform: 'mac', paired: false, online: true }])],
+        peers: scene === 'empty' ? [] : [pc, ...(scene === 'pair' ? [] : [{ id: 'nb', name: 'Studio iMac', platform: 'mac', paired: false, online: true }]),
+          { id: 'ph', name: 'Pixel 9', platform: 'android', paired: true, connected: true, online: true,
+            phone: { battery: 81, charging: true, notifs: [{ key: 'a', app: 'WhatsApp', title: 'Mum', text: 'Dinner at 8?', ts: Date.now() / 1000 - 120 },
+              { key: 'b', app: 'Gmail', title: 'Invoice #2291', text: 'Your invoice is ready.', ts: Date.now() / 1000 - 4000 }] } }],
         pairing: scene === 'pair' ? { role: 'responder', phase: 'showing', code: '481 096'.replace(' ', ''), peer: 'Studio iMac' } : null,
         transfers: scene === 'home' || scene === 'driving' ? [
           { id: 't1', dir: 'out', peer: 'pc', peer_name: 'Yuvraj-PC', label: 'Edit v3 - Final.mov', count: 1, total: 2.4e9, done: 1.5e9, phase: 'sending', started: 2 },
@@ -628,6 +709,7 @@
       info: async () => ({ version: '1.0.0', platform: 'darwin', settings: { auto_check: true, auto_install: true }, update: { phase: 'uptodate' }, site: 'https://kvm.pxlvzn.in' }),
       state: async () => state,
       login_state: async () => ({ supported: true, on: true }),
+      pair_phone: async () => (state.agent.qr = true) && ({ svg: '<svg viewBox="0 0 10 10"><rect width="10" height="10" fill="#fff"/><rect x="1" y="1" width="3" height="3"/><rect x="6" y="1" width="3" height="3"/><rect x="1" y="6" width="3" height="3"/></svg>' }),
       set_side: async (pid, side) => { const p = state.agent.peers.find((x) => x.id === pid); if (p) p.side = side; },
     }, { get: (t, k) => t[k] || noop });
   }
