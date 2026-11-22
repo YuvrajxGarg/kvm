@@ -30,6 +30,19 @@ class DeskLayoutTest(unittest.TestCase):
         self.assertEqual(exits[0]["side"], "bottom")
         self.assertLess(self.be.pos[1], 1440)   # never went onto the laptop
         self.assertEqual(exits[0]["pt"][0], 300.0)
+        # Left a little inside the edge, and it can't cross back out by itself for a moment.
+        self.assertLessEqual(self.be.pos[1], 1440 - 1 - 6)
+        self.assertGreater(self.be.quiet_until, time.time())
+
+    def test_no_crossing_right_after_coming_home(self):
+        be = FakeBackend(rects=[(0, 0, 2560, 1440)])
+        be.start(lambda e: None)
+        be.targets = [[0.0, 1440.0, 1470.0, 956.0]]   # a computer below
+        be.place_at(800, 1439)
+        for _ in range(4):
+            self.assertFalse(be.on_local_move(800, 1439, 0, 0))
+        be.quiet_until = 0
+        self.assertTrue(be.on_local_move(800, 1439, 0, 5))
 
     def test_down_where_nothing_is_below_stays_on_monitor(self):
         self.be.place_at(2300, 1400)   # desk x 1800: past the Mac's right edge

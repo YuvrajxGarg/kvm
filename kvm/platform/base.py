@@ -38,7 +38,9 @@ from ..screens import Screens, beyond, landing
 # Going home from the other computer needs a deliberate push: a mouse settles with a pixel or
 # two of drift, and right after crossing that drift used to send the pointer straight back.
 EXIT_GRACE = 0.25   # seconds after entering when the edge home is closed
-EXIT_PUSH = 8.0     # how far past the edge the pointer has to be pushed
+EXIT_PUSH = 8.0
+QUIET_AFTER = 0.6   # seconds after the pointer leaves for (or lands from) another computer with no crossing
+QUIET_INSET = 6.0   # how far inside the edge the pointer waits after leaving through it     # how far past the edge the pointer has to be pushed
 GAP = 48.0          # screens this close count as touching
 
 BUTTONS = (1, 2, 3, 4, 5)
@@ -81,6 +83,7 @@ class Backend(object):
         self.home = []               # being driven: the driver's screens
         self.entered = 0.0
         self.push = 0.0
+        self.quiet_until = 0.0       # no crossing from here until then (the pointer just came home)
         self.held_local = set()      # keys physically down here (for hold-to-cross, hotkeys)
         self.buttons_local = set()
         self.held_inj = set()        # keys we injected and haven't released
@@ -225,7 +228,7 @@ class Backend(object):
     def on_local_move(self, x, y, dx, dy):
         """Pointer moved here while not grabbed. Returns True to swallow the event."""
         if self.grabbed or not (self.watch_sides or self.targets) or self.locked or self.buttons_local \
-                or not self.share_out:
+                or not self.share_out or time.time() < self.quiet_until:
             self.edge_hits = {}
             self.edge_push = 0.0
             return False
@@ -352,6 +355,7 @@ class Backend(object):
         x, y = self.screens.clamp(float(x), float(y))
         self.pos = (x, y)
         self._warp(x, y)
+        self.quiet_until = time.time() + QUIET_AFTER
 
     def place(self, side, frac):
         """Put this computer's pointer on its `side` edge at `frac`, just inside."""
@@ -359,6 +363,7 @@ class Backend(object):
         x, y = self.screens.entry(side, frac, inset=2.0)
         self.pos = (x, y)
         self._warp(x, y)
+        self.quiet_until = time.time() + QUIET_AFTER
 
     # ---- being driven ----------------------------------------------------------
     def inject_move(self, dx, dy):
@@ -389,6 +394,16 @@ class Backend(object):
             if self.push >= EXIT_PUSH:
                 self.release()
                 self.exits, self.map, self.home, self.push = [], [], [], 0.0
+                # Leave our pointer a little inside the edge it went out of, and don't let it cross
+                # from here by itself for a moment: sitting on that edge, stray events would carry
+                # it straight back out (taking over the computer it just went home to).
+                bx, by = self.screens.clamp(nx, ny)
+                bx -= {"right": QUIET_INSET, "left": -QUIET_INSET}.get(exit_side, 0)
+                by -= {"bottom": QUIET_INSET, "top": -QUIET_INSET}.get(exit_side, 0)
+                bx, by = self.screens.clamp(bx, by)
+                self.pos = (bx, by)
+                self._post_move(bx, by, set())
+                self.quiet_until = time.time() + QUIET_AFTER
                 ev = {"t": "exit", "side": exit_side, "frac": frac}
                 if pt:
                     ev["pt"] = pt
