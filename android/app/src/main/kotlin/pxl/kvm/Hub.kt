@@ -122,8 +122,8 @@ object Hub {
     /** Sends photos or files (content:// uris) to a computer, on a thread of its own. */
     fun sendUris(id: String, uris: List<Uri>) {
         val c = conns[id]
-        val link = c?.bulk ?: c?.main
-        if (link == null) {
+        val link = c?.let { it.bulk ?: it.main }
+        if (c == null || link == null) {
             toast("That computer isn't connected.")
             return
         }
