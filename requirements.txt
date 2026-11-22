@@ -1,0 +1,16 @@
+# App window (WebKit on macOS, Edge WebView2 on Windows)
+pywebview>=5.0
+# Encryption: ChaCha20-Poly1305 sessions (libsodium)
+pynacl>=1.5
+# Pairing: SPAKE2 password-authenticated key exchange over the 6-digit code
+spake2>=0.9
+# Finding other Kvm computers on the network (Bonjour / mDNS)
+zeroconf>=0.131
+# Trusted certificates for update checks in the packaged app
+certifi
+# macOS: reading and posting keyboard and mouse events, the clipboard
+pyobjc-framework-Quartz>=10; sys_platform == "darwin"
+pyobjc-framework-ApplicationServices>=10; sys_platform == "darwin"
+pyobjc-framework-Cocoa>=10; sys_platform == "darwin"
+# Windows: the service that reaches admin prompts and the sign-in screen
+pywin32>=306; sys_platform == "win32"

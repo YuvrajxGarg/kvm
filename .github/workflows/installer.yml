@@ -1,0 +1,48 @@
+# Checks the app and its installers on pull requests: unit tests, builds the app, the
+# Windows setup wizard (with the Kvm service) and the macOS disk image, installs the
+# setup, checks the service, uninstalls, and keeps both as downloadable artifacts. Releases build them in release.yml.
+name: Installer
+
+on:
+  pull_request:
+    paths: [installer/**, kvm/**, tests/**, assets/**, requirements.txt, .github/workflows/installer.yml, .github/workflows/release.yml, Kvm.spec, Kvm.py]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyinstaller certifi -r requirements.txt
+      - run: python -m unittest discover tests
+      - run: pyinstaller --noconfirm --log-level WARN Kvm.spec
+      - name: Smoke-test the built app
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then python tests/smoke_app.py dist/Kvm.app/Contents/MacOS/Kvm
+          else python tests/smoke_app.py dist/Kvm/Kvm.exe; fi
+      - name: Disk image (macOS)
+        if: runner.os == 'macOS'
+        run: installer/build_mac.sh Kvm && installer/test_mac.sh Kvm
+      - name: Setup wizard (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          installer/build_windows.ps1 -App Kvm -Version "$(Get-Content VERSION)" -Url https://kvm.pxlvzn.in
+          installer/test_windows.ps1 -App Kvm -Smoke "python tests/smoke_app.py"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kvm-${{ runner.os }}
+          path: |
+            dist/Kvm.dmg
+            dist/Kvm-Setup.exe
+          if-no-files-found: error
