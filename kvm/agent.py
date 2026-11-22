@@ -605,7 +605,8 @@ class Agent(object):
                 v = self._views[pid] = {"phase": "asking", "error": None, "w": 0, "h": 0, "seq": 0, "control": False,
                                         "jpeg": None, "cond": threading.Condition(), "since": time.time()}
             v["url"] = self._view_server.url(pid)
-        p.main.msg({"t": "view", "on": True, "fps": fps, "maxw": maxw, "q": quality})
+            v["req"] = {"t": "view", "on": True, "fps": fps, "maxw": maxw, "q": quality}
+        p.main.msg(v["req"])
         return v["url"]
 
     def view_stop(self, pid):
@@ -1072,6 +1073,18 @@ class Agent(object):
             self._configure_backend()
             if link.dialer == self._store.id:
                 threading.Thread(target=self._dial, args=(pid, "bulk"), daemon=True).start()
+            self._resume_asks(pid, link)
+
+    def _resume_asks(self, pid, link):
+        with self._lock:
+            v = self._views.get(pid)
+            asks = [v["req"]] if v and v.get("req") and v.get("phase") != "refused" else []
+            if self._hear.get(pid, {}).get("phase") in ("asking", "live", "reconnecting"):
+                asks.append({"t": "listen", "on": True})
+            if self._mic_out.get(pid, {}).get("phase") in ("asking", "live", "reconnecting"):
+                asks.append({"t": "mic", "on": True})
+        for m in asks:
+            link.msg(m)
 
     def _ensure_link(self, pid):
         with self._lock:
@@ -1119,10 +1132,13 @@ class Agent(object):
                 for other in (p.bulk, p.media):
                     if other:
                         other.close()
-                self._views.pop(link.peer_id, None)
+                # What we asked of that computer (its screen, its sound, our mic there) is asked
+                # again when it reconnects; what it asked of us, it asks again itself.
+                for d in (self._views, self._hear, self._mic_out):
+                    v = d.get(link.peer_id)
+                    if v and v.get("phase") != "refused":
+                        v.update(phase="reconnecting")
                 self._drop_watcher(link.peer_id)
-                self._hear.pop(link.peer_id, None)
-                self._mic_out.pop(link.peer_id, None)
                 self._drop_listener(link.peer_id)
                 self._drop_mic_in(link.peer_id)
                 self._retune_mic()
