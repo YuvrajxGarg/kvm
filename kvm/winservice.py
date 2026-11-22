@@ -78,6 +78,7 @@ class HelperProxy(Backend):
     name = "windows-service"
     can_capture = True
     can_inject = True
+    can_audio = True  # the helper plays and records in the signed-in session
 
     def __init__(self):
         self._proc = None
@@ -111,8 +112,10 @@ class HelperProxy(Backend):
         if c == "sas":
             send_sas()
             return
-        if c in ("config", "lock", "driven"):
+        if c in ("config", "lock", "driven", "capture"):
             self._state[c] = cmd
+        if c == "audio_capture":
+            self._state["audio_capture:%s" % cmd.get("src")] = cmd
         if c == "action" and cmd.get("a") == "lock":
             lock_session()
             return
@@ -151,7 +154,8 @@ class HelperProxy(Backend):
             self._fout = fout
         self._fin = fin
         threading.Thread(target=self._reader, args=(fin, proc), daemon=True).start()
-        for k in ("config", "lock"):
+        # A new helper (sign-in, switch user) picks up where the last one was.
+        for k in ("config", "lock", "capture", "audio_capture:output", "audio_capture:mic"):
             if k in self._state:
                 self._send(self._state[k])
 
@@ -325,7 +329,7 @@ def run_agent_forever(stop_event):
     slog("starting the agent")
     agent = ServiceAgent(HelperProxy(), Store(folder)).start()
     slog("agent listening on %s" % agent.port)
-    srv = control.serve(agent, folder)
+    srv = control.serve(agent, folder, log=slog)
     slog("control endpoint up")
     stop_event.wait()
     slog("stopping")
@@ -357,7 +361,8 @@ def _lock_down(folder):
     try:
         import subprocess
         subprocess.run(["icacls", folder, "/inheritance:r", "/grant:r", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"],
-                       capture_output=True, timeout=20, creationflags=0x08000000)
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=20, creationflags=0x08000000)
     except Exception:
         pass
 

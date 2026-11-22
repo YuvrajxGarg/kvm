@@ -163,6 +163,69 @@ class TwoComputers(unittest.TestCase):
         time.sleep(0.5)
         self.assertNotIn(("action", "lock"), self.pc_be.posted)
 
+    def test_view_and_control_the_screen(self):
+        import urllib.request
+        url = self.mac.view_start(self.pc_id, fps=20)
+        self.assertTrue(wait(lambda: self.mac.status()["views"][self.pc_id]["phase"] == "live"))
+        self.assertTrue(wait(lambda: self.mac.status()["views"][self.pc_id]["seq"] > 0))
+        self.assertEqual(self.pc.status()["watchers"][0]["id"], self.mac_id)
+        v = self.mac.status()["views"][self.pc_id]
+        self.assertEqual((v["w"], v["h"]), (1600, 514))  # a 4480x1440 desktop, scaled to 1600 wide
+        self.assertTrue(v["control"])
+        self.assertTrue(wait(lambda: self.mac._media_ok(self.pc_id) and self.pc._media_ok(self.mac_id)))
+        # The picture stream serves JPEGs on 127.0.0.1 with the token, and nothing without it.
+        frame = url.replace("/view/", "/frame/") + "&after=0"
+        with urllib.request.urlopen(frame, timeout=5) as r:
+            self.assertEqual(r.read(2), b"\xff\xd8")
+        with self.assertRaises(Exception):
+            urllib.request.urlopen(frame.replace("k=", "k=x"), timeout=5)
+        # Click in the middle of the PC's second monitor from the viewer, and type.
+        self.mac.view_input(self.pc_id, {"k": "abs", "x": 0.75, "y": 0.5})
+        self.assertTrue(wait(lambda: any(e[0] == "move" and abs(e[1] - 3360) < 1 and abs(e[2] - 720) < 1
+                                         for e in self.pc_be.posted)))
+        self.mac.view_input(self.pc_id, {"k": "button", "b": 1, "d": True})
+        self.mac.view_input(self.pc_id, {"k": "button", "b": 1, "d": False})
+        self.mac.view_input(self.pc_id, {"k": "key", "code": "KeyA", "d": True})
+        self.mac.view_input(self.pc_id, {"k": "key", "code": "KeyA", "d": False})
+        self.assertTrue(wait(lambda: ("key", keys.BY_NAME["a"], False) in self.pc_be.posted))
+        self.assertIn(("button", 1, True), self.pc_be.posted)
+        # Stopping ends the pictures; turning sharing off refuses the next viewer.
+        self.mac.view_stop(self.pc_id)
+        self.assertTrue(wait(lambda: not self.pc.status()["watchers"]))
+        self.pc._store.set("screen_share", False)
+        self.mac.view_start(self.pc_id)
+        self.assertTrue(wait(lambda: self.mac.status()["views"][self.pc_id]["phase"] == "refused"))
+
+    def test_hear_the_other_computer_and_use_this_mic_there(self):
+        import base64
+        block = bytes(range(256)) * 15  # one 20 ms block of 16-bit stereo
+        # Hear the PC on the Mac: the PC records its sound, the Mac plays it.
+        self.mac.listen_start(self.pc_id)
+        self.assertTrue(wait(lambda: self.mac.status()["sound"]["hear"][self.pc_id]["phase"] == "live"))
+        self.assertTrue(wait(lambda: ("audio_capture", "output", True) in self.pc_be.posted))
+        self.assertEqual(self.pc.status()["sound"]["listeners"][0]["id"], self.mac_id)
+        self.pc._on_backend({"t": "audio", "src": "output", "pcm": base64.b64encode(block).decode()})
+        self.assertTrue(wait(lambda: ("speaker", block) in self.mac_be.sound))
+        # Mac's mic into the PC's virtual microphone.
+        self.mac.mic_start(self.pc_id)
+        self.assertTrue(wait(lambda: self.mac.status()["sound"]["mic"][self.pc_id]["phase"] == "live"))
+        self.assertTrue(wait(lambda: ("audio_capture", "mic", True) in self.mac_be.posted))
+        self.mac._on_backend({"t": "audio", "src": "mic", "pcm": base64.b64encode(block).decode()})
+        self.assertTrue(wait(lambda: ("mic", block) in self.pc_be.sound))
+        # No virtual mic on the PC: the Mac is told why and stops recording.
+        self.pc._on_backend({"t": "audio_err", "sink": "mic", "why": "nocable", "error": "Install VB-CABLE."})
+        self.assertTrue(wait(lambda: self.mac.status()["sound"]["mic"][self.pc_id]["phase"] == "refused"))
+        self.assertIn("VB-CABLE", self.mac.status()["sound"]["mic"][self.pc_id]["error"])
+        self.assertTrue(wait(lambda: ("audio_capture", "mic", False) in self.mac_be.posted))
+        # Stopping and refusing.
+        self.mac.listen_stop(self.pc_id)
+        self.assertTrue(wait(lambda: ("audio_capture", "output", False) in self.pc_be.posted))
+        self.assertTrue(wait(lambda: not self.pc.status()["sound"]["listeners"]))
+        self.pc.set_setting("sound_share", False)
+        self.mac.listen_start(self.pc_id)
+        self.assertTrue(wait(lambda: self.mac.status()["sound"]["hear"][self.pc_id]["phase"] == "refused"))
+        self.assertIn("doesn't share its sound", self.mac.status()["sound"]["hear"][self.pc_id]["error"])
+
     def test_reconnects_after_restart(self):
         self.pc.stop()
         self.assertTrue(wait(lambda: not any(p["connected"] for p in self.mac.status()["peers"])))

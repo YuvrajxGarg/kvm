@@ -14,27 +14,28 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = 47611
 METHODS = {"status", "rename", "set_setting", "set_side", "forget", "add_address", "pair", "pair_code", "pair_cancel",
-           "action", "go_home", "set_locked", "send_files", "cancel_transfer", "clear_transfers"}
+           "action", "go_home", "set_locked", "send_files", "cancel_transfer", "clear_transfers",
+           "view_start", "view_stop", "view_input", "stop_sharing",
+           "listen_start", "listen_stop", "mic_start", "mic_stop", "stop_sound"}
 
 
 def token_dir():
     return os.path.join(os.environ.get("ProgramData") or "C:\\ProgramData", "PXLVZN", "KvmControl")
 
 
-def serve(agent, _data_dir=None, port=PORT):
+def serve(agent, _data_dir=None, port=PORT, log=None):
+    log = log or (lambda m: None)
     folder = token_dir()
     os.makedirs(folder, exist_ok=True)
     token = secrets.token_hex(24)
     path = os.path.join(folder, "token")
     with open(path, "w") as f:
         f.write(token)
-    try:
-        import subprocess
-        subprocess.run(["icacls", folder, "/inheritance:r", "/grant:r", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F",
-                        "*S-1-5-4:(OI)(CI)R"], capture_output=True, timeout=20, creationflags=0x08000000)
-    except Exception:
-        pass
-
+    log("control token written")
+    # Only the system, administrators and signed-in users may read the token. Done on its own
+    # thread: icacls has been seen to stall in a just-started service, and the window must not
+    # wait for it (ProgramData already keeps other accounts' files read-only).
+    threading.Thread(target=_restrict, args=(folder, log), name="kvm-control-acl", daemon=True).start()
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
@@ -64,6 +65,20 @@ def serve(agent, _data_dir=None, port=PORT):
     srv.daemon_threads = True
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
+
+
+def _restrict(folder, log):
+    import subprocess
+    import time
+    t = time.time()
+    try:
+        r = subprocess.run(["icacls", folder, "/inheritance:r", "/grant:r", "*S-1-5-18:(OI)(CI)F",
+                            "*S-1-5-32-544:(OI)(CI)F", "*S-1-5-4:(OI)(CI)R"],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=60, creationflags=0x08000000)
+        log("control folder locked down (icacls %s, %.1f s)" % (r.returncode, time.time() - t))
+    except Exception as e:
+        log("control folder lock-down failed after %.1f s: %r" % (time.time() - t, e))
 
 
 class RemoteAgent(object):

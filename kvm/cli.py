@@ -17,7 +17,8 @@ def _selftest(out):
     import tempfile
 
     res = {"version": __version__}
-    mods = ["webview", "nacl", "spake2", "zeroconf", "certifi"]
+    mods = ["webview", "nacl", "spake2", "zeroconf", "certifi", "PIL.Image", "PIL.ImageDraw", "PIL.JpegImagePlugin",
+            "numpy", "kvm.audio"]
     if sys.platform == "darwin":
         mods += ["Quartz", "AppKit", "ApplicationServices"]
     if os.name == "nt":
@@ -36,6 +37,25 @@ def _selftest(out):
     except Exception as e:
         res["backend"] = False
         res["backend_error"] = repr(e)
+    # A real picture of this screen (not required: a CI runner may have no screen to take).
+    try:
+        from .platform import native_backend
+        be = native_backend()
+        be._capture_thread_init()
+        img = be._grab_screen()
+        res["screen_grab"] = "%dx%d" % img.size if img is not None else "none"
+    except Exception as e:
+        res["screen_grab"] = "error: %r" % e
+    # Sound devices (informational: a CI runner may have none). The Mac's sound tool must be bundled.
+    try:
+        from . import audio
+        sc = audio._sc()
+        res["sound"] = "speakers: %d, mics: %d" % (len(sc.all_speakers()), len(sc.all_microphones()))
+    except Exception as e:
+        res["sound"] = "error: %r" % e
+    if sys.platform == "darwin" and getattr(sys, "frozen", False):
+        from .audio import tap_path
+        res["audiotap"] = bool(tap_path())
     tmp = tempfile.mkdtemp()
     try:
         res["loopback"] = _loopback(tmp)
@@ -79,6 +99,8 @@ def _loopback(tmp):
         assert wait(lambda: b.status()["mode"] == "driven")
         a_be.on_local_key(keys.BY_NAME["k"], True)
         assert wait(lambda: ("key", keys.BY_NAME["k"], True) in b_be.posted)
+        a.view_start(b._store.id)  # the screen viewer: pictures arrive, JPEG-encoded by this build's Pillow
+        assert wait(lambda: a.status()["views"][b._store.id]["seq"] > 0)
         return True
     finally:
         a.stop()

@@ -142,3 +142,29 @@ def parse_combo(text):
 
 def combo_down(groups, held):
     return bool(groups) and all(held & g for g in groups)
+
+
+# KeyboardEvent.code (the screen viewer window) -> HID usage.
+_DOM = {"Enter": "enter", "Escape": "esc", "Backspace": "backspace", "Tab": "tab", "Space": "space",
+        "Minus": "minus", "Equal": "equal", "BracketLeft": "lbracket", "BracketRight": "rbracket",
+        "Backslash": "backslash", "Semicolon": "semicolon", "Quote": "quote", "Backquote": "grave",
+        "Comma": "comma", "Period": "period", "Slash": "slash", "CapsLock": "capslock",
+        "PrintScreen": "printscreen", "ScrollLock": "scrolllock", "Pause": "pause", "Insert": "insert",
+        "Home": "home", "PageUp": "pageup", "Delete": "delete", "End": "end", "PageDown": "pagedown",
+        "ArrowRight": "right", "ArrowLeft": "left", "ArrowDown": "down", "ArrowUp": "up", "NumLock": "numlock",
+        "NumpadDivide": "kp_divide", "NumpadMultiply": "kp_multiply", "NumpadSubtract": "kp_minus",
+        "NumpadAdd": "kp_plus", "NumpadEnter": "kp_enter", "NumpadDecimal": "kp_decimal", "NumpadEqual": "kp_equal",
+        "IntlBackslash": "iso_backslash", "ContextMenu": "menu", "IntlRo": "intl_ro", "IntlYen": "intl_yen",
+        "Lang1": "lang1", "Lang2": "lang2", "ControlLeft": "lctrl", "ShiftLeft": "lshift", "AltLeft": "lalt",
+        "MetaLeft": "lmeta", "ControlRight": "rctrl", "ShiftRight": "rshift", "AltRight": "ralt",
+        "MetaRight": "rmeta", "OSLeft": "lmeta", "OSRight": "rmeta", "AudioVolumeMute": "mute",
+        "AudioVolumeUp": "volume_up", "AudioVolumeDown": "volume_down", "MediaTrackNext": "media_next",
+        "MediaTrackPrevious": "media_prev", "MediaStop": "media_stop", "MediaPlayPause": "media_play"}
+DOM_CODES = {code: BY_NAME[n] for code, n in _DOM.items()}
+for _c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+    DOM_CODES["Key" + _c] = BY_NAME[_c.lower()]
+for _d in "0123456789":
+    DOM_CODES["Digit" + _d] = BY_NAME[_d]
+    DOM_CODES["Numpad" + _d] = BY_NAME["kp" + _d]
+for _f in range(1, 21):
+    DOM_CODES["F%d" % _f] = BY_NAME["f%d" % _f]

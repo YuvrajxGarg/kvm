@@ -41,7 +41,14 @@ for ($i = 0; $i -lt 30 -and -not $ok; $i++) {
   if ($out -match '"me"') { $ok = $true } else { Start-Sleep 1 }
 }
 Get-Content "$env:TEMP\kvm-status.txt" | Select-Object -First 30 | Out-Host
-if (-not $ok) { throw "the service's control endpoint didn't answer" }
+if (-not $ok) {
+  Write-Host "-- service: $((Get-Service -Name $App).Status)"
+  Write-Host "-- service.log"; Get-Content "$env:ProgramData\PXLVZN\Kvm\service.log" -ErrorAction SilentlyContinue | Out-Host
+  Write-Host "-- listening"; netstat -ano | Select-String ":4761[01]" | Out-Host
+  Get-WinEvent -FilterHashtable @{LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-10)} -ErrorAction SilentlyContinue |
+    Where-Object { $_.Message -match 'Kvm|Python' } | Select-Object -First 10 | Format-List TimeCreated, ProviderName, Message | Out-Host
+  throw "the service's control endpoint didn't answer"
+}
 $acl = (Get-Acl "$env:ProgramData\PXLVZN\Kvm").Access | ForEach-Object { $_.IdentityReference.Value }
 Write-Host "pair store readable by: $($acl -join ', ')"
 if ($acl -match 'Users') { throw "the pair store must not be readable by every user" }

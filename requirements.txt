@@ -6,6 +6,11 @@ pynacl>=1.5
 spake2>=0.9
 # Finding other Kvm computers on the network (Bonjour / mDNS)
 zeroconf>=0.131
+# Screen sharing: pictures of the screen, JPEG-encoded
+pillow>=10
+# Sound: hearing the other computer, and its microphone (WASAPI on Windows, CoreAudio on a Mac)
+soundcard>=0.4.6
+numpy>=1.26
 # Trusted certificates for update checks in the packaged app
 certifi
 # macOS: reading and posting keyboard and mouse events, the clipboard
