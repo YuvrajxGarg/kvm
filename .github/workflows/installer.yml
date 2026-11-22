@@ -33,6 +33,9 @@ jobs:
         shell: cmd
         run: native\win\build.cmd
       - run: pyinstaller --noconfirm --log-level WARN Kvm.spec
+      - name: Sign so macOS keeps its permissions across updates
+        if: runner.os == 'macOS'
+        run: installer/sign_mac.sh Kvm com.yuvrajgarg.kvm
       - name: Smoke-test the built app
         run: |
           if [ "$RUNNER_OS" = "macOS" ]; then python tests/smoke_app.py dist/Kvm.app/Contents/MacOS/Kvm
