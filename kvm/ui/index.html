@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Kvm</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="splash" class="pywebview-drag-region">
+    <div class="glow"></div>
+    <span class="mark splash-mark" style="--size:76px"><span class="l">k</span><span class="l">v</span><span class="l">m</span><span class="twin" aria-hidden="true"><i class="a"></i><i class="dot"></i><i class="b"></i></span></span>
+  </div>
+
+  <div id="app">
+    <div class="titlebar pywebview-drag-region"></div>
+    <div id="scroll">
+      <header class="top pywebview-drag-region">
+        <span class="mark" style="--size:20px">kvm<span class="twin" aria-hidden="true"><i class="a"></i><i class="dot"></i><i class="b"></i></span></span>
+        <span class="faint" id="version"></span>
+        <span class="spacer"></span>
+        <button class="update-pill hidden" id="update-pill"></button>
+        <button class="btn-icon lg" id="open-settings" title="Settings"><i data-icon="gear"></i></button>
+      </header>
+
+      <div id="banners"></div>
+
+      <section class="hero card">
+        <div class="hero-head">
+          <div class="now">
+            <b id="now-title">Getting ready</b>
+            <span id="now-sub"></span>
+          </div>
+          <button class="btn-quiet hidden" id="lock-btn"><i data-icon="lock"></i><span>Cursor lock</span></button>
+          <button class="btn-quiet hidden" id="home-btn"><i data-icon="home"></i><span>Bring pointer back</span></button>
+        </div>
+        <div class="desk" id="desk"></div>
+        <div class="desk-hint" id="desk-hint"></div>
+      </section>
+
+      <div class="section-head"><h3>Computers</h3><span class="spacer"></span>
+        <button class="link" id="add-address">Add by address</button></div>
+      <section id="peers" class="peers"></section>
+
+      <div class="section-head hidden" id="transfers-head"><h3>Files</h3><span class="spacer"></span>
+        <button class="link" id="open-received">Open received folder</button>
+        <button class="link" id="clear-transfers">Clear</button></div>
+      <section id="transfers" class="transfers"></section>
+      <div class="bottom-space"></div>
+    </div>
+  </div>
+
+  <div id="drop-veil" class="hidden"><div><i data-icon="send"></i><b>Drop on a computer to send</b></div></div>
+  <div id="modal-root"></div>
+  <div id="toasts"></div>
+  <script src="app.js"></script>
+</body>
+</html>
