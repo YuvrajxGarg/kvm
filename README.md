@@ -46,6 +46,8 @@ Copy on one, paste on the other. Send files across. No account, no cloud.</p>
 - **Cursor lock** (F14 on a Mac keyboard, Scroll Lock on a PC) keeps the pointer where it is, **hold a key to cross**
   makes edges cross only while a key is held, and <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Esc</kbd> brings the pointer
   home from anywhere. So does **shaking the mouse** left and right, if you turn it on.
+- **Trackpad stays on the Mac** (Mouse › Trackpad): only a mouse crosses to the other computer; the MacBook's
+  trackpad always moves the pointer on the Mac.
 - **Sharing hotkey:** double-tap Right Shift (or another key you pick) to turn sharing on or off. Each direction can be
   switched off on its own, the edge can take a firmer push to cross, and scrolling from the other computer can be
   reversed.

@@ -2039,7 +2039,7 @@ class Agent(object):
         if not s.get("share_out"):
             sides, targets = [], []
         self._backend.handle({"c": "config", "sides": sides, "targets": targets, "cross_mod": s.get("cross_modifier"),
-                              "share_out": bool(s.get("share_out")), "edge_resistance": s.get("edge_resistance") or 0,
+                              "share_out": bool(s.get("share_out")), "trackpad_stays": bool(s.get("trackpad_stays")), "edge_resistance": s.get("edge_resistance") or 0,
                               "reverse_scroll": bool(s.get("reverse_scroll")), "toggle_key": s.get("toggle_key") or "",
                               "file_keys": bool(s.get("file_keys")), "clipboard_secrets": bool(s.get("clipboard_secrets")),
                               "return_hotkey": s.get("return_hotkey"), "lock_key": s.get("lock_key"),

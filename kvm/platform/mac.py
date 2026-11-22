@@ -35,6 +35,10 @@ F_SCROLL_Y, F_SCROLL_X = 11, 12
 F_SCROLL_PT_Y, F_SCROLL_PT_X = 96, 97
 F_SCROLL_CONT = 88
 SYSTEM_DEFINED = 14
+# Trackpad touches: NSEventTypeGesture, BeginGesture, EndGesture. A mouse never sends these, so a
+# move right after one came from the trackpad.
+TOUCH_TYPES = (29, 19, 20)
+TOUCH_RECENT = 0.25
 TAP_DISABLED = (0xFFFFFFFE, 0xFFFFFFFF)
 
 # Media keys (NX_KEYTYPE_*) <-> HID
@@ -86,6 +90,7 @@ class MacBackend(Backend):
         self._pb_count = None
         self._pb_cache = None
         self._tap_error = None
+        self._touch_ts = 0.0
         Backend.__init__(self)
 
     # ---- lifecycle ---------------------------------------------------------
@@ -100,7 +105,7 @@ class MacBackend(Backend):
                   Quartz.kCGEventRightMouseDown, Quartz.kCGEventRightMouseUp, Quartz.kCGEventOtherMouseDown,
                   Quartz.kCGEventOtherMouseUp, Quartz.kCGEventLeftMouseDragged, Quartz.kCGEventRightMouseDragged,
                   Quartz.kCGEventOtherMouseDragged, Quartz.kCGEventScrollWheel, Quartz.kCGEventKeyDown,
-                  Quartz.kCGEventKeyUp, Quartz.kCGEventFlagsChanged, SYSTEM_DEFINED):
+                  Quartz.kCGEventKeyUp, Quartz.kCGEventFlagsChanged, SYSTEM_DEFINED) + TOUCH_TYPES:
             mask |= 1 << t
         while self._tap is None:
             tap = Quartz.CGEventTapCreate(Quartz.kCGHIDEventTap, Quartz.kCGHeadInsertEventTap,
@@ -129,11 +134,17 @@ class MacBackend(Backend):
             except Exception:
                 pass
 
+    def _from_trackpad(self):
+        return time.time() - self._touch_ts < TOUCH_RECENT
+
     # ---- the tap ---------------------------------------------------------------
     def _callback(self, proxy, etype, event, refcon):
         try:
             if etype in TAP_DISABLED:
                 Quartz.CGEventTapEnable(self._tap, True)
+                return event
+            if etype in TOUCH_TYPES:
+                self._touch_ts = time.time()
                 return event
             if Quartz.CGEventGetIntegerValueField(event, F_USERDATA) == MARK:
                 return event
