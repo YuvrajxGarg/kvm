@@ -22,7 +22,11 @@ for pkg in ("nacl", "spake2", "zeroconf", "soundcard"):
 if sys.platform == "darwin":
     hiddenimports += ["kvm.platform.mac", "Quartz", "AppKit", "Foundation", "ApplicationServices", "PyObjCTools.AppHelper"]
 elif sys.platform == "win32":
-    hiddenimports += ["kvm.platform.win", "kvm.winservice", "kvm.control", "win32timezone", "servicemanager", "win32service",
+    # The "Kvm Camera" webcam (Windows 11), built by native/win/build.cmd.
+    cam = os.path.join(root, "native-build", "KvmCam.dll")
+    if os.path.exists(cam):
+        binaries.append((cam, "."))
+    hiddenimports += ["kvm.vcam", "kvm.platform.win", "kvm.winservice", "kvm.control", "win32timezone", "servicemanager", "win32service",
                       "win32serviceutil", "win32event", "win32ts", "win32profile", "win32process", "win32security",
                       "win32pipe", "win32api", "win32con", "pywintypes"]
 excludes = ["tkinter", "_tkinter", "matplotlib", "scipy"]

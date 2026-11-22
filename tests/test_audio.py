@@ -149,3 +149,19 @@ class AudioTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VirtualCameraPictureTest(unittest.TestCase):
+    def test_letterbox(self):
+        import io as _io
+        from PIL import Image
+        from kvm import vcam
+        buf = _io.BytesIO()
+        Image.new("RGB", (640, 640), (255, 0, 0)).save(buf, "JPEG")
+        out = vcam.letterbox(buf.getvalue())
+        self.assertEqual(len(out), 1280 * 720 * 4)
+        mid = (360 * 1280 + 640) * 4
+        self.assertGreater(out[mid + 2], 200)   # red in the middle (BGRX)
+        self.assertLess(out[mid], 40)
+        self.assertEqual(out[0:3], b"\0\0\0")  # black bar at the left
+        self.assertFalse(vcam.available() if sys.platform != "win32" else False)

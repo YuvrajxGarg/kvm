@@ -156,6 +156,11 @@ class Backend(object):
             self.vdisplay(cmd)
         elif c == "camera":
             self.camera(cmd)
+        elif c == "vcam_frame":
+            self.vcam().frame(base64.b64decode(cmd.get("jpeg") or ""))
+        elif c == "vcam_stop":
+            if getattr(self, "_vcam", None):
+                self._vcam.stop()
         elif c == "audio_capture":
             self.audio().capture(cmd.get("src"), bool(cmd.get("on")))
         elif c == "audio_play":
@@ -383,6 +388,13 @@ class Backend(object):
 
     # ---- this computer's camera, for another computer -----------------------------------
     can_camera = False
+    can_vcam = False          # a virtual webcam here shows the other computer's camera to apps
+
+    def vcam(self):
+        if getattr(self, "_vcam", None) is None:
+            from ..vcam import VirtualCamera
+            self._vcam = VirtualCamera(self.sink, all_users=bool(getattr(self, "_secure", False)))
+        return self._vcam
 
     def camera(self, cmd):
         if cmd.get("on"):
