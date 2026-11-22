@@ -89,6 +89,7 @@ class Agent(object):
         self._extend_out = {}              # pid -> {"phase", "error", "w", "h"}: our extra display shows there
         self._extend_in = {}               # pid -> {"w", "h"}: that computer's extra display shows here
         self._vrect = None                 # where our extra display is on our desktop
+        self._cam_watchers = set()         # pids using our camera
 
     # ==== lifecycle ==============================================================
     def start(self):
@@ -193,6 +194,8 @@ class Agent(object):
                           "listeners": [{"id": pid, "name": self._peer_name(pid)} for pid in self._listeners],
                           "mic_in": [{"id": pid, "name": self._peer_name(pid)} for pid in self._mic_in],
                           "available": bool(self._backend.can_audio)},
+                "camera": {"can": bool(self._backend.can_camera),
+                           "watchers": [{"id": pid, "name": self._peer_name(pid)} for pid in self._cam_watchers]},
                 "extend": {"out": {pid: dict(v) for pid, v in self._extend_out.items()},
                            "in": [dict(v, id=pid, name=self._peer_name(pid)) for pid, v in self._extend_in.items()],
                            "can": bool(getattr(self._backend, "can_vdisplay", False))},
@@ -211,6 +214,8 @@ class Agent(object):
         if key == "sound_share" and not value:
             for pid in list(self._listeners):
                 self._drop_listener(pid, why="stopped")
+        if key == "camera_share" and not value:
+            self.stop_camera()
         if key == "mic_accept" and not value:
             for pid in list(self._mic_in):
                 self._drop_mic_in(pid, why="stopped")
@@ -773,6 +778,103 @@ class Agent(object):
             if link:
                 link.blob(frame[0], frame[1])
 
+    # ==== the other computer's camera ===============================================
+    # We ask ("cam"); it turns its camera on and sends each picture ("camframe", a JPEG) over
+    # the media link. Here it shows in a Kvm window (the view server, under "cam-<pid>"), and on
+    # a computer with a virtual camera, apps can use it as a webcam.
+    def camera_start(self, pid):
+        """Use a paired computer's camera here. Returns the local address of its picture stream."""
+        p = self._connected(pid)
+        key = "cam-" + pid
+        with self._lock:
+            if not self._view_server:
+                from .viewserver import ViewServer
+                self._view_server = ViewServer(self).start()
+            v = self._views.get(key)
+            if not v:
+                v = self._views[key] = {"phase": "asking", "error": None, "w": 0, "h": 0, "seq": 0, "control": False,
+                                        "jpeg": None, "cond": threading.Condition(), "since": time.time(), "camera": True}
+            v["url"] = self._view_server.url(key)
+            v["req"] = {"t": "cam", "on": True}
+        p.main.msg(v["req"])
+        return v["url"]
+
+    def camera_stop(self, pid):
+        self.view_stop("cam-" + pid)
+        p = self._peers.get(pid)
+        if p and p.main and not p.main.closed:
+            p.main.msg({"t": "cam", "on": False})
+        return True
+
+    def _on_cam_msg(self, pid, link, m):
+        t = m.get("t")
+        if t == "cam":
+            if not m.get("on"):
+                self._drop_cam_watcher(pid)
+                return
+            if not self._store.get("camera_share") or not self._backend.can_camera:
+                link.msg({"t": "cam_refused", "why": "off" if self._backend.can_camera else "unsupported"})
+                return
+            with self._lock:
+                new = pid not in self._cam_watchers
+                self._cam_watchers.add(pid)
+            if new:
+                self._notice("%s is using this computer's camera." % self._peer_name(pid))
+                self._backend.handle({"c": "camera", "on": True, "w": 1280, "h": 720, "fps": 30})
+            link.msg({"t": "cam_ok"})
+            self._ensure_media(pid, link)
+            return
+        v = self._views.get("cam-" + pid)
+        if not v:
+            return
+        name = self._peer_name(pid)
+        if t == "cam_ok":
+            v.update(phase="live", error=None)
+            self._ensure_media(pid, link)
+        elif t == "cam_refused":
+            v.update(phase="refused", error=m.get("error") or {
+                "off": "%s doesn't share its camera. Turn it on in Kvm settings there." % name,
+                "stopped": "%s stopped sharing its camera." % name}.get(
+                m.get("why"), "%s can't share its camera yet." % name))
+            with v["cond"]:
+                v["cond"].notify_all()
+        elif t == "camframe" and "_data" in m:
+            with v["cond"]:
+                v.update(jpeg=m["_data"], w=m.get("w", 0), h=m.get("h", 0), seq=v["seq"] + 1, phase="live")
+                v["cond"].notify_all()
+            if getattr(self._backend, "can_vcam", False):
+                self._backend.handle({"c": "vcam_frame", "jpeg": b64e(m["_data"]), "w": m.get("w"), "h": m.get("h")})
+
+    def _drop_cam_watcher(self, pid, why=None, error=None):
+        with self._lock:
+            if pid not in self._cam_watchers:
+                return
+            self._cam_watchers.discard(pid)
+            left = bool(self._cam_watchers)
+        if not left:
+            self._backend.handle({"c": "camera", "on": False})
+        if why:
+            p = self._peers.get(pid)
+            if p and p.main and not p.main.closed:
+                p.main.msg({"t": "cam_refused", "why": why, "error": error})
+
+    def stop_camera(self):
+        """Stop everyone using this computer's camera."""
+        for pid in list(self._cam_watchers):
+            self._drop_cam_watcher(pid, why="stopped")
+        return True
+
+    def _on_local_camframe(self, ev):
+        with self._lock:
+            pids = list(self._cam_watchers)
+        if not pids:
+            return
+        data = b64d(ev["jpeg"])
+        for pid in pids:
+            link = self._sound_link(pid)  # media if it's up, else main
+            if link:
+                link.blob({"t": "camframe", "w": ev.get("w"), "h": ev.get("h")}, data)
+
     # ==== extending this computer onto another ======================================
     # This computer adds an extra display (a virtual one, on a Mac) and the other computer shows
     # it full screen, like a monitor plugged in over the network. It's a screen view of just that
@@ -1185,6 +1287,9 @@ class Agent(object):
                 asks.append({"t": "listen", "on": True})
             if self._mic_out.get(pid, {}).get("phase") in ("asking", "live", "reconnecting"):
                 asks.append({"t": "mic", "on": True})
+            c = self._views.get("cam-" + pid)
+            if c and c.get("phase") != "refused":
+                asks.append({"t": "cam", "on": True})
             e = self._extend_out.get(pid)
             if e and e.get("phase") in ("live", "reconnecting") and self._vrect:
                 e.update(phase="live")
@@ -1240,12 +1345,15 @@ class Agent(object):
                         other.close()
                 # What we asked of that computer (its screen, its sound, our mic there) is asked
                 # again when it reconnects; what it asked of us, it asks again itself.
-                for d in (self._views, self._hear, self._mic_out, self._extend_out):
-                    v = d.get(link.peer_id)
+                for d, key in ((self._views, link.peer_id), (self._views, "cam-" + link.peer_id),
+                               (self._hear, link.peer_id), (self._mic_out, link.peer_id),
+                               (self._extend_out, link.peer_id)):
+                    v = d.get(key)
                     if v and v.get("phase") != "refused":
                         v.update(phase="reconnecting")
                 self._drop_watcher(link.peer_id)
                 self._drop_listener(link.peer_id)
+                self._drop_cam_watcher(link.peer_id)
                 # _extend_in stays: the display window waits through a reconnect, and the other
                 # computer asks again (or says it stopped).
                 self._drop_mic_in(link.peer_id)
@@ -1371,6 +1479,9 @@ class Agent(object):
         if t in ("view", "vin", "view_ok", "view_refused", "frame"):
             self._on_view_msg(pid, link, m)
             return
+        if t in ("cam", "cam_ok", "cam_refused", "camframe"):
+            self._on_cam_msg(pid, link, m)
+            return
         if t in ("extend", "extend_refused"):
             self._on_extend_msg(pid, link, m)
             return
@@ -1488,6 +1599,14 @@ class Agent(object):
             return
         if t == "vdisplay":
             self._on_vdisplay(ev)
+            return
+        if t == "camframe":
+            self._on_local_camframe(ev)
+            return
+        if t == "camera":
+            if not ev.get("on") and ev.get("error"):
+                for pid in list(self._cam_watchers):
+                    self._drop_cam_watcher(pid, why="failed", error=ev["error"])
             return
         if t == "log":
             self._log(ev.get("text"))

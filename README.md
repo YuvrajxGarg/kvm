@@ -30,6 +30,8 @@ Copy on one, paste on the other. Send files across. No account, no cloud.</p>
 - **Use the PC as an extra display for the Mac** (… › Use as a display): the Mac gets a new display the size of the
   PC's monitor, and the PC shows it full screen. Drag windows onto it and move the pointer there like any display;
   the PC's own mouse and keyboard work on it too. Close it on the PC, or press Stop on the Mac, to end it.
+- **Use the Mac's camera on the PC** (… › Use *Mac*'s camera): it shows in a Kvm window on the PC. Using it as a
+  webcam in Windows apps is next.
 - **Ring, lock or sleep** the other computer.
 - **Cursor lock** (F14 on a Mac keyboard, Scroll Lock on a PC) keeps the pointer where it is, **hold a key to cross**
   makes edges cross only while a key is held, and <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Esc</kbd> brings the pointer
@@ -79,7 +81,7 @@ kvm/winservice.py   the Windows service and its helper           kvm/control.py 
 kvm/viewserver.py   the other screen's live picture, to the viewer window (127.0.0.1, token)
 kvm/audio.py        sound: 48 kHz stereo in 20 ms blocks, WASAPI loopback / CoreAudio, virtual mic
 native/             kvm-audiotap.swift: what a Mac is playing (ScreenCaptureKit); kvm-vdisplay.swift: an extra
-                    display (CGVirtualDisplay); built by native/build.sh
+                    display (CGVirtualDisplay); kvm-camera.swift: the camera (AVFoundation); built by native/build.sh
 kvm/ui/             the window (open index.html?demo in a browser for a preview)
 ```
 

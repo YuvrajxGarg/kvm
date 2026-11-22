@@ -174,6 +174,44 @@ class Api(object):
         win.events.closed += closed
         return {"ok": True}
 
+    def open_camera(self, pid):
+        """A window with that computer's camera (and, on Windows 11, the "Kvm Camera" webcam)."""
+        key = "cam-" + pid
+        w = self._viewers.get(key)
+        if w:
+            try:
+                w.restore()
+                w.show()
+                return {"ok": True}
+            except Exception:
+                self._viewers.pop(key, None)
+        if not self._agent:
+            return {"error": "Kvm is still starting."}
+        try:
+            self._agent.camera_start(pid)
+        except Exception as e:
+            return {"error": str(e)}
+        name = "the other computer"
+        try:
+            for p in (self._agent.status() or {}).get("peers", []):
+                if p.get("id") == pid:
+                    name = p.get("name") or name
+        except Exception:
+            pass
+        win = webview.create_window("%s camera · Kvm" % name,
+                                    url=os.path.join(UI_DIR, "viewer.html") + "?pid=" + key + "&camera=1",
+                                    js_api=self, width=800, height=490, min_size=(320, 220), background_color="#000000")
+        self._viewers[key] = win
+
+        def closed():
+            self._viewers.pop(key, None)
+            self._call("camera_stop", pid)
+        win.events.closed += closed
+        return {"ok": True}
+
+    def stop_camera(self):
+        return self._call("stop_camera")
+
     def extend(self, pid, on):
         """Use that computer's screen as an extra display for this one (on=True), or stop."""
         return self._call("extend_start" if on else "extend_stop", pid)
@@ -225,8 +263,9 @@ class Api(object):
         except Exception:
             st = None
         v = ((st or {}).get("views") or {}).get(pid)
-        name = next((p.get("name") for p in (st or {}).get("peers", []) if p.get("id") == pid), None)
-        plat = next((p.get("platform") for p in (st or {}).get("peers", []) if p.get("id") == pid), None)
+        peer = pid[4:] if pid.startswith("cam-") else pid
+        name = next((p.get("name") for p in (st or {}).get("peers", []) if p.get("id") == peer), None)
+        plat = next((p.get("platform") for p in (st or {}).get("peers", []) if p.get("id") == peer), None)
         return {"view": v, "name": name, "platform": plat, "me": sys.platform}
 
     def view_input(self, pid, ev):

@@ -27,6 +27,7 @@
     unlink: '<path d="M9.5 14.5 14.5 9.5"/><path d="m11 6.5 1.5-1.5a4 4 0 0 1 5.6 5.6L16.5 12.2M7.5 11.8l-1.6 1.6a4 4 0 0 0 5.6 5.6l1.5-1.5"/><path d="M4 4l16 16"/>',
     speaker: '<path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/>',
     mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>',
+    camera: '<path d="M3.5 8a2 2 0 0 1 2-2h8.5a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5.5a2 2 0 0 1-2-2z"/><path d="m16 10.5 4.5-3v9l-4.5-3"/>',
     keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M7.5 14h9"/>',
   };
   const icon = (n) => `<svg class="i" viewBox="0 0 24 24">${ICONS[n] || ''}</svg>`;
@@ -189,6 +190,11 @@
       out.push(`<div class="banner info">${icon('monitor')}<div class="t"><b>${v.phase === 'live' ? 'Using ' + esc(p.name || 'the other computer') + ' as a display' : 'Adding a display…'}</b>
         <span>Move the pointer onto it like any other display. Arrange it in System Settings › Displays.</span></div>
         <button class="btn-quiet" data-act="extend-stop" data-pid="${pid}">Stop</button></div>`);
+    }
+    for (const w of ((a && a.camera) || {}).watchers || []) {
+      out.push(`<div class="banner info">${icon('camera')}<div class="t"><b>${esc(w.name)} is using this camera</b>
+        <span>It sees what this computer’s camera sees.</span></div>
+        <button class="btn-quiet" data-act="stop-camera">Stop</button></div>`);
     }
     for (const w of (a && a.watchers) || []) {
       out.push(`<div class="banner info">${icon('monitor')}<div class="t"><b>${esc(w.name)} is looking at this screen</b>
@@ -402,6 +408,7 @@
         ${opt('Share this screen', 'Paired computers can see this screen in a Kvm window.', s.screen_share, 'screen_share')}
         ${opt('Allow control from the viewer', 'They can also click and type on it from that window.', s.screen_control, 'screen_control')}
         ${opt('Be a display for paired computers', 'A paired Mac can use this screen as an extra display. It opens full screen; close it to stop.', s.display_accept, 'display_accept')}
+        ${opt('Share this computer’s camera', 'Paired computers can use it, in a Kvm window or as a webcam.', s.camera_share, 'camera_share')}
         ${opt('Share this computer’s sound', 'Paired computers can hear what plays here.', s.sound_share, 'sound_share')}
         ${opt('Take a microphone from paired computers', isMac ? 'Their microphone plays into BlackHole, so apps here can use it.' : 'Their microphone plays into VB-CABLE, so apps here can use it.', s.mic_accept, 'mic_accept')}
       </div>
@@ -470,6 +477,7 @@
           ...((st.agent.extend && st.agent.extend.can) ? [(st.agent.extend.out || {})[pid]
             ? { icon: 'monitor', label: `Stop using ${p.name} as a display`, run: () => api.extend(pid, false) }
             : { icon: 'monitor', label: `Use ${p.name} as a display for this Mac`, run: async () => { const r = await api.extend(pid, true); if (r && r.error) toast(r.error, true); } }] : []),
+          { icon: 'camera', label: `Use ${p.name}'s camera`, run: async () => { const r = await api.open_camera(pid); if (r && r.error) toast(r.error, true); } },
           { icon: 'send', label: 'Send files…', run: () => api.send_files(pid, false) },
           { icon: 'folder', label: 'Send a folder…', run: () => api.send_files(pid, true) },
           '-',
@@ -484,6 +492,7 @@
       }
       case 'stop-share': api.stop_sharing(); break;
       case 'extend-stop': api.extend(pid, false); break;
+      case 'stop-camera': api.stop_camera(); break;
       case 'listen': case 'mic': {
         const cur = st.agent.sound && st.agent.sound[b.dataset.act === 'listen' ? 'hear' : 'mic'][pid];
         const on = !(cur && cur.phase !== 'refused' && cur.phase !== 'failed');

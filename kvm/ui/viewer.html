@@ -49,6 +49,10 @@
     const qs = new URLSearchParams(location.search);
     const pid = qs.get('pid');
     const asDisplay = qs.get('display') === '1';
+    const asCamera = qs.get('camera') === '1';
+    if (asCamera) {
+      document.getElementById('msg').querySelector('b').textContent = 'Waiting for the camera';
+    }
     if (asDisplay) {
       document.body.classList.add('display');
       document.getElementById('end').classList.remove('hidden');
@@ -147,7 +151,8 @@
       try {
         const s = await api.viewer_state(pid);
         view = s.view;
-        if (s.name) { $('name').textContent = s.name + (asDisplay ? ' display' : ''); document.title = s.name + (asDisplay ? ' display' : '') + ' · Kvm'; }
+        const what = asDisplay ? ' display' : (asCamera ? ' camera' : '');
+        if (s.name) { $('name').textContent = s.name + what; document.title = s.name + what + ' · Kvm'; }
         if (view && view.url && view.url !== url) { url = view.url; gotFrame = false; img.src = url; }
         render();
       } catch (e) { /* keep trying */ }

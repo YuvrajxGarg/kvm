@@ -16,6 +16,7 @@ Events a backend sends:
   {"t": "frame", "jpeg", "w", "h", "seq", "cursor"}   (sharing the screen) a new picture of it
   {"t": "audio", "src", "pcm"} / {"t": "audio_err", ...}   sound (see kvm/audio.py)
   {"t": "vdisplay", "on", "rect", "error"}  the extra (virtual) display for extending onto another computer
+  {"t": "camframe", "jpeg", "w", "h"} / {"t": "camera", "on", "error"}   this computer's camera
   {"t": "log", "text"}
 """
 
@@ -153,6 +154,8 @@ class Backend(object):
             self.inject_abs(cmd["x"], cmd["y"], cmd.get("rect"))
         elif c == "vdisplay":
             self.vdisplay(cmd)
+        elif c == "camera":
+            self.camera(cmd)
         elif c == "audio_capture":
             self.audio().capture(cmd.get("src"), bool(cmd.get("on")))
         elif c == "audio_play":
@@ -378,6 +381,13 @@ class Backend(object):
         box = (int((x - sc.left) * k), int((y - sc.top) * k), int((x - sc.left + w) * k), int((y - sc.top + h) * k))
         return img.crop(box)
 
+    # ---- this computer's camera, for another computer -----------------------------------
+    can_camera = False
+
+    def camera(self, cmd):
+        if cmd.get("on"):
+            self.sink({"t": "camera", "on": False, "error": "This computer can't share its camera yet."})
+
     # ---- extending this computer onto another (an extra, virtual display) ---------------
     def vdisplay(self, cmd):
         if cmd.get("on"):
@@ -493,6 +503,10 @@ class FakeBackend(Backend):
     can_capture = True
     can_inject = True
     can_vdisplay = True
+    can_camera = True
+
+    def camera(self, cmd):
+        self.posted.append(("camera", bool(cmd.get("on"))))
 
     def __init__(self, rects=((0, 0, 1920, 1080),)):
         self.rects = [tuple(r) for r in rects]

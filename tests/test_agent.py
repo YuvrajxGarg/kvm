@@ -255,6 +255,33 @@ class TwoComputers(unittest.TestCase):
         self.assertTrue(wait(lambda: not self.mac.status()["extend"]["out"]))
         self.assertFalse(self.pc.status()["extend"]["in"])
 
+    def test_use_the_other_computers_camera(self):
+        import base64
+        import io
+        import urllib.request
+        from PIL import Image
+        url = self.pc.camera_start(self.mac_id)
+        self.assertTrue(wait(lambda: ("camera", True) in self.mac_be.posted))
+        self.assertTrue(wait(lambda: self.pc.status()["views"]["cam-" + self.mac_id]["phase"] == "live"))
+        self.assertEqual(self.mac.status()["camera"]["watchers"][0]["id"], self.pc_id)
+        buf = io.BytesIO()
+        Image.new("RGB", (1280, 720), (200, 40, 40)).save(buf, "JPEG")
+        self.mac._on_backend({"t": "camframe", "jpeg": base64.b64encode(buf.getvalue()).decode(), "w": 1280, "h": 720})
+        self.assertTrue(wait(lambda: self.pc.status()["views"]["cam-" + self.mac_id]["seq"] > 0))
+        with urllib.request.urlopen(url.replace("/view/", "/frame/") + "&after=0", timeout=5) as r:
+            self.assertEqual(r.read(), buf.getvalue())
+        # The camera can fail on the Mac (permission): the PC is told why.
+        self.mac._on_backend({"t": "camera", "on": False, "error": "Allow Kvm to use the camera."})
+        self.assertTrue(wait(lambda: self.pc.status()["views"]["cam-" + self.mac_id]["phase"] == "refused"))
+        self.assertIn("Allow Kvm", self.pc.status()["views"]["cam-" + self.mac_id]["error"])
+        self.assertTrue(wait(lambda: ("camera", False) in self.mac_be.posted))
+        # Sharing off refuses.
+        self.mac.set_setting("camera_share", False)
+        self.pc.camera_stop(self.mac_id)
+        self.pc.camera_start(self.mac_id)
+        self.assertTrue(wait(lambda: self.pc.status()["views"]["cam-" + self.mac_id]["phase"] == "refused"))
+        self.assertIn("doesn't share its camera", self.pc.status()["views"]["cam-" + self.mac_id]["error"])
+
     def test_reconnects_after_restart(self):
         self.pc.stop()
         self.assertTrue(wait(lambda: not any(p["connected"] for p in self.mac.status()["peers"])))
