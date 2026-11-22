@@ -25,6 +25,8 @@
     folder: '<path d="M3.5 6.5a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>',
     file: '<path d="M7 3.5h7l4 4v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2z"/><path d="M14 3.5v4h4"/>',
     unlink: '<path d="M9.5 14.5 14.5 9.5"/><path d="m11 6.5 1.5-1.5a4 4 0 0 1 5.6 5.6L16.5 12.2M7.5 11.8l-1.6 1.6a4 4 0 0 0 5.6 5.6l1.5-1.5"/><path d="M4 4l16 16"/>',
+    speaker: '<path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/>',
+    mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>',
     keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M7.5 14h9"/>',
   };
   const icon = (n) => `<svg class="i" viewBox="0 0 24 24">${ICONS[n] || ''}</svg>`;
@@ -129,8 +131,17 @@
     for (const n of a.notices || []) {
       if (n.id > seenNotice) { if (seenNotice) toast(n.text); seenNotice = n.id; }
     }
+    // sound that couldn't start (sharing off there, no virtual microphone, ...)
+    const snd = a.sound || {};
+    for (const kind of ['hear', 'mic']) {
+      for (const [pid, v] of Object.entries(snd[kind] || {})) {
+        const k = kind + pid + (v.error || '');
+        if (v.error && !soundErrs.has(k)) { soundErrs.add(k); toast(v.error, true); }
+      }
+    }
     renderPairing(a);
   }
+  const soundErrs = new Set();
 
   function hk(s) {
     const isMac = info.platform === 'darwin';
@@ -151,6 +162,16 @@
       out.push(`<div class="banner info">${icon('shield')}<div class="t"><b>Admin prompts and the sign-in screen</b>
         <span>Install Kvm with Kvm-Setup so your other computer’s keyboard also works on Windows admin prompts and when this PC is locked.</span></div>
         <button class="btn-quiet" data-act="get-setup">Get the setup</button></div>`);
+    }
+    const snd = (a && a.sound) || {};
+    for (const w of snd.listeners || []) {
+      out.push(`<div class="banner info">${icon('speaker')}<div class="t"><b>${esc(w.name)} is hearing this computer</b>
+        <span>What plays here also plays there.</span></div>
+        <button class="btn-quiet" data-act="listen-drop" data-pid="${w.id}">Stop</button></div>`);
+    }
+    for (const w of snd.mic_in || []) {
+      out.push(`<div class="banner info">${icon('mic')}<div class="t"><b>${esc(w.name)}’s microphone is on here</b>
+        <span>Apps here can use it: pick ${info.platform === 'darwin' ? '“BlackHole”' : '“CABLE Output”'} as the microphone.</span></div></div>`);
     }
     for (const w of (a && a.watchers) || []) {
       out.push(`<div class="banner info">${icon('monitor')}<div class="t"><b>${esc(w.name)} is looking at this screen</b>
@@ -214,8 +235,12 @@
         const sub = p.paired
           ? `<i class="dotst ${p.connected ? 'on' : ''}"></i>${p.connected ? 'Connected' : (p.online ? 'Connecting…' : 'Not on this network')}${p.side ? ` · to the ${SIDE_NAME[p.side]}` : ''}`
           : `<i class="dotst"></i>Nearby · not paired`;
+        const snd = (a.sound && a.sound.hear && a.sound.hear[p.id]) || null;
+        const mic = (a.sound && a.sound.mic && a.sound.mic[p.id]) || null;
         const acts = p.paired
-          ? `<button class="btn-quiet" data-act="view" data-pid="${p.id}" ${p.connected ? '' : 'disabled'}>${icon('monitor')}<span>Screen</span></button>
+          ? `<button class="btn-icon lg ${snd && snd.phase !== 'refused' ? 'on' : ''}" data-act="listen" data-pid="${p.id}" ${p.connected ? '' : 'disabled'} title="${snd ? 'Stop hearing ' + esc(p.name) : 'Hear ' + esc(p.name) + '’s sound here'}">${icon('speaker')}</button>
+             <button class="btn-icon lg ${mic && mic.phase !== 'refused' && mic.phase !== 'failed' ? 'on' : ''}" data-act="mic" data-pid="${p.id}" ${p.connected ? '' : 'disabled'} title="${mic ? 'Stop using this microphone on ' + esc(p.name) : 'Use this microphone on ' + esc(p.name)}">${icon('mic')}</button>
+             <button class="btn-quiet" data-act="view" data-pid="${p.id}" ${p.connected ? '' : 'disabled'}>${icon('monitor')}<span>Screen</span></button>
              <button class="btn-quiet" data-act="send" data-pid="${p.id}" ${p.connected ? '' : 'disabled'}>${icon('send')}<span>Send files</span></button>
              <button class="btn-icon lg" data-act="more" data-pid="${p.id}" title="More">${icon('more')}</button>`
           : `<button class="btn-primary inline" data-act="pair" data-pid="${p.id}">Pair</button>`;
@@ -359,6 +384,8 @@
         ${opt('Ring, lock and sleep from paired computers', 'Lets a paired computer find, lock or put this one to sleep.', s.remote_actions, 'remote_actions')}
         ${opt('Share this screen', 'Paired computers can see this screen in a Kvm window.', s.screen_share, 'screen_share')}
         ${opt('Allow control from the viewer', 'They can also click and type on it from that window.', s.screen_control, 'screen_control')}
+        ${opt('Share this computer’s sound', 'Paired computers can hear what plays here.', s.sound_share, 'sound_share')}
+        ${opt('Take a microphone from paired computers', isMac ? 'Their microphone plays into BlackHole, so apps here can use it.' : 'Their microphone plays into VB-CABLE, so apps here can use it.', s.mic_accept, 'mic_accept')}
       </div>
       <div class="label">Updates</div>
       <div class="group">
@@ -435,6 +462,15 @@
         break;
       }
       case 'stop-share': api.stop_sharing(); break;
+      case 'listen': case 'mic': {
+        const cur = st.agent.sound && st.agent.sound[b.dataset.act === 'listen' ? 'hear' : 'mic'][pid];
+        const on = !(cur && cur.phase !== 'refused' && cur.phase !== 'failed');
+        const r = await api[b.dataset.act](pid, on);
+        if (r && r.error) toast(r.error, true);
+        poll();
+        break;
+      }
+      case 'listen-drop': api.stop_sound(); break;
       case 'cancel-tr': api.cancel_transfer(b.dataset.tid); break;
       case 'reveal': api.reveal(b.dataset.path); break;
       case 'perm-ask': api.request_permissions(); break;

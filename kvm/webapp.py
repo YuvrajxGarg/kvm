@@ -198,6 +198,17 @@ class Api(object):
     def stop_sharing(self):
         return self._call("stop_sharing")
 
+    def listen(self, pid, on):
+        """Hear that computer's sound here (on=True), or stop."""
+        return self._call("listen_start" if on else "listen_stop", pid)
+
+    def stop_sound(self):
+        return self._call("stop_sound")
+
+    def mic(self, pid, on):
+        """Use this computer's microphone on that one (on=True), or stop."""
+        return self._call("mic_start" if on else "mic_stop", pid)
+
     def cancel_transfer(self, tid):
         return self._call("cancel_transfer", tid)
 

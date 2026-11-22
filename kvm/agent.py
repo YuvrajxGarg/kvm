@@ -82,6 +82,10 @@ class Agent(object):
         self._views = {}                   # pid -> the other computer's screen we're watching
         self._watchers = {}                # pid -> a computer watching our screen
         self._view_server = None
+        self._hear = {}                    # pid -> {"phase", "error"}: we're hearing that computer
+        self._listeners = set()            # pids hearing this computer
+        self._mic_out = {}                 # pid -> {"phase", "error"}: our mic goes to that computer
+        self._mic_in = set()               # pids whose mic plays into our virtual mic
 
     # ==== lifecycle ==============================================================
     def start(self):
@@ -181,6 +185,11 @@ class Agent(object):
                 "views": {pid: {k: v[k] for k in ("phase", "error", "w", "h", "seq", "control", "url")}
                           for pid, v in self._views.items()},
                 "watchers": [{"id": pid, "name": self._peer_name(pid)} for pid in self._watchers],
+                "sound": {"hear": {pid: dict(v) for pid, v in self._hear.items()},
+                          "mic": {pid: dict(v) for pid, v in self._mic_out.items()},
+                          "listeners": [{"id": pid, "name": self._peer_name(pid)} for pid in self._listeners],
+                          "mic_in": [{"id": pid, "name": self._peer_name(pid)} for pid in self._mic_in],
+                          "available": bool(self._backend.can_audio)},
             }
 
     def rename(self, name):
@@ -193,6 +202,12 @@ class Agent(object):
         self._store.set(key, value)
         if key == "screen_share" and not value:
             self.stop_sharing()
+        if key == "sound_share" and not value:
+            for pid in list(self._listeners):
+                self._drop_listener(pid, why="stopped")
+        if key == "mic_accept" and not value:
+            for pid in list(self._mic_in):
+                self._drop_mic_in(pid, why="stopped")
         self._configure_backend()
         return self._store.settings()
 
@@ -744,6 +759,191 @@ class Agent(object):
             if link:
                 link.blob(frame[0], frame[1])
 
+    # ==== sound ====================================================================
+    # Hearing a computer: we ask ("listen"); it records what it plays and sends 20 ms blocks of
+    # PCM ("pcm", src "output") over the media link; we play them out of our speakers.
+    # Our mic on a computer: we ask ("mic"); once it says yes we record our microphone and send
+    # it ("pcm", src "mic"); it plays them into its virtual microphone (VB-CABLE / BlackHole).
+    def listen_start(self, pid):
+        """Hear what a paired computer is playing, on this computer's speakers."""
+        p = self._connected(pid)
+        with self._lock:
+            self._hear[pid] = {"phase": "asking", "error": None}
+        p.main.msg({"t": "listen", "on": True})
+        return True
+
+    def listen_stop(self, pid):
+        with self._lock:
+            had = self._hear.pop(pid, None)
+        p = self._peers.get(pid)
+        if had and p and p.main and not p.main.closed:
+            p.main.msg({"t": "listen", "on": False})
+        return True
+
+    def mic_start(self, pid):
+        """Send this computer's microphone to a paired computer's virtual microphone."""
+        p = self._connected(pid)
+        with self._lock:
+            self._mic_out[pid] = {"phase": "asking", "error": None}
+        p.main.msg({"t": "mic", "on": True})
+        return True
+
+    def mic_stop(self, pid):
+        with self._lock:
+            had = self._mic_out.pop(pid, None)
+        p = self._peers.get(pid)
+        if had and p and p.main and not p.main.closed:
+            p.main.msg({"t": "mic", "on": False})
+        self._retune_mic()
+        return True
+
+    def stop_sound(self):
+        """Stop everyone hearing this computer (they can ask again)."""
+        for pid in list(self._listeners):
+            self._drop_listener(pid, why="stopped")
+        return True
+
+    def _connected(self, pid):
+        p = self._peers.get(pid)
+        if not (p and p.main and not p.main.closed):
+            raise RuntimeError("%s isn't connected." % self._peer_name(pid))
+        return p
+
+    def _on_sound_msg(self, pid, link, m):
+        t = m.get("t")
+        name = self._peer_name(pid)
+        if t == "listen":
+            if not m.get("on"):
+                self._drop_listener(pid)
+                return
+            if not self._store.get("sound_share") or not self._backend.can_audio:
+                link.msg({"t": "listen_refused", "why": "off" if self._backend.can_audio else "unsupported"})
+                return
+            with self._lock:
+                new = pid not in self._listeners
+                self._listeners.add(pid)
+            if new:
+                self._notice("%s is listening to this computer." % name)
+            link.msg({"t": "listen_ok"})
+            self._backend.handle({"c": "audio_capture", "src": "output", "on": True})
+            self._ensure_media(pid, link)
+        elif t == "mic":
+            if not m.get("on"):
+                self._drop_mic_in(pid)
+                return
+            if not self._store.get("mic_accept") or not self._backend.can_audio:
+                link.msg({"t": "mic_refused", "why": "off" if self._backend.can_audio else "unsupported"})
+                return
+            with self._lock:
+                self._mic_in.add(pid)
+            link.msg({"t": "mic_ok"})
+            self._ensure_media(pid, link)
+        elif t == "pcm":
+            data = m.get("_data")
+            if not data:
+                return
+            if m.get("src") == "output" and pid in self._hear:
+                self._hear[pid].update(phase="live", error=None)
+                self._backend.handle({"c": "audio_play", "sink": "speaker", "pcm": b64e(data)})
+            elif m.get("src") == "mic" and pid in self._mic_in:
+                self._backend.handle({"c": "audio_play", "sink": "mic", "pcm": b64e(data)})
+        elif t in ("listen_ok", "listen_refused"):
+            v = self._hear.get(pid)
+            if not v:
+                return
+            if t == "listen_ok":
+                v.update(phase="live", error=None)
+                self._ensure_media(pid, link)
+            else:
+                v.update(phase="refused", error=_sound_why(m, name, "hear"))
+        elif t in ("mic_ok", "mic_refused"):
+            v = self._mic_out.get(pid)
+            if not v:
+                return
+            if t == "mic_ok":
+                v.update(phase="live", error=None)
+                self._ensure_media(pid, link)
+            else:
+                v.update(phase="refused", error=_sound_why(m, name, "mic"))
+            self._retune_mic()
+
+    def _ensure_media(self, pid, link):
+        if not self._media_ok(pid) and link.dialer == self._store.id:  # whoever dialled main dials media
+            threading.Thread(target=self._dial, args=(pid, "media"), daemon=True).start()
+
+    def _drop_listener(self, pid, why=None):
+        with self._lock:
+            if pid not in self._listeners:
+                return
+            self._listeners.discard(pid)
+            left = bool(self._listeners)
+        if not left:
+            self._backend.handle({"c": "audio_capture", "src": "output", "on": False})
+        if why:
+            p = self._peers.get(pid)
+            if p and p.main and not p.main.closed:
+                p.main.msg({"t": "listen_refused", "why": why})
+
+    def _drop_mic_in(self, pid, why=None, error=None):
+        with self._lock:
+            if pid not in self._mic_in:
+                return
+            self._mic_in.discard(pid)
+        if why:
+            p = self._peers.get(pid)
+            if p and p.main and not p.main.closed:
+                p.main.msg({"t": "mic_refused", "why": why, "error": error})
+
+    def _retune_mic(self):
+        with self._lock:
+            on = any(v.get("phase") == "live" for v in self._mic_out.values())
+        self._backend.handle({"c": "audio_capture", "src": "mic", "on": on})
+
+    def _sound_link(self, pid):
+        p = self._peers.get(pid)
+        if p:
+            for l in (p.media, p.main):
+                if l and not l.closed:
+                    return l
+        return None
+
+    def _on_local_audio(self, ev):
+        src = ev.get("src")
+        with self._lock:
+            if src == "output":
+                pids = list(self._listeners)
+            else:
+                pids = [pid for pid, v in self._mic_out.items() if v.get("phase") == "live"]
+        if not pids:
+            return
+        pcm = b64d(ev["pcm"])
+        for pid in pids:
+            link = self._sound_link(pid)
+            if link:
+                link.blob({"t": "pcm", "src": src}, pcm)
+
+    def _on_audio_err(self, ev):
+        why, err = ev.get("why") or "failed", ev.get("error")
+        if ev.get("src") == "output":
+            for pid in list(self._listeners):
+                self._drop_listener(pid)
+                p = self._peers.get(pid)
+                if p and p.main and not p.main.closed:
+                    p.main.msg({"t": "listen_refused", "why": why, "error": err})
+        elif ev.get("src") == "mic":
+            with self._lock:
+                for v in self._mic_out.values():
+                    v.update(phase="failed", error=err)
+            self._notice(err or "Couldn't use the microphone.")
+        elif ev.get("sink") == "mic":
+            for pid in list(self._mic_in):
+                self._drop_mic_in(pid, why=why, error=err)
+        elif ev.get("sink") == "speaker":
+            with self._lock:
+                for v in self._hear.values():
+                    v.update(error=err)
+
+
     # ==== networking ===============================================================
     def _listen(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -921,6 +1121,11 @@ class Agent(object):
                         other.close()
                 self._views.pop(link.peer_id, None)
                 self._drop_watcher(link.peer_id)
+                self._hear.pop(link.peer_id, None)
+                self._mic_out.pop(link.peer_id, None)
+                self._drop_listener(link.peer_id)
+                self._drop_mic_in(link.peer_id)
+                self._retune_mic()
                 if self._active == link.peer_id:
                     if self._mode == "driving":
                         self._backend.handle({"c": "grab", "on": False})
@@ -1042,6 +1247,9 @@ class Agent(object):
         if t in ("view", "vin", "view_ok", "view_refused", "frame"):
             self._on_view_msg(pid, link, m)
             return
+        if t in ("listen", "listen_ok", "listen_refused", "mic", "mic_ok", "mic_refused", "pcm"):
+            self._on_sound_msg(pid, link, m)
+            return
         if t == "files":
             self._on_files(pid, m)
         elif t == "piece":
@@ -1145,6 +1353,12 @@ class Agent(object):
         if t == "frame":
             self._on_local_frame(ev)
             return
+        if t == "audio":
+            self._on_local_audio(ev)
+            return
+        if t == "audio_err":
+            self._on_audio_err(ev)
+            return
         if t == "log":
             self._log(ev.get("text"))
 
@@ -1228,6 +1442,18 @@ class PairError(Exception):
 
 class _Stop(Exception):
     pass
+
+
+def _sound_why(m, name, what):
+    why = m.get("why")
+    if m.get("error"):
+        return m["error"] if why != "nocable" else "%s: %s" % (name, m["error"])
+    if why == "off":
+        return ("%s doesn't share its sound. Turn it on in Kvm settings there." if what == "hear"
+                else "%s doesn't accept a microphone. Turn it on in Kvm settings there.") % name
+    if why == "stopped":
+        return ("%s stopped sharing its sound." if what == "hear" else "%s stopped taking your microphone.") % name
+    return "%s can't do sound yet." % name
 
 
 def _why(code):

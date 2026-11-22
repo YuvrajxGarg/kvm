@@ -17,7 +17,8 @@ def _selftest(out):
     import tempfile
 
     res = {"version": __version__}
-    mods = ["webview", "nacl", "spake2", "zeroconf", "certifi", "PIL.Image", "PIL.ImageDraw", "PIL.JpegImagePlugin"]
+    mods = ["webview", "nacl", "spake2", "zeroconf", "certifi", "PIL.Image", "PIL.ImageDraw", "PIL.JpegImagePlugin",
+            "numpy", "kvm.audio"]
     if sys.platform == "darwin":
         mods += ["Quartz", "AppKit", "ApplicationServices"]
     if os.name == "nt":
@@ -45,6 +46,16 @@ def _selftest(out):
         res["screen_grab"] = "%dx%d" % img.size if img is not None else "none"
     except Exception as e:
         res["screen_grab"] = "error: %r" % e
+    # Sound devices (informational: a CI runner may have none). The Mac's sound tool must be bundled.
+    try:
+        from . import audio
+        sc = audio._sc()
+        res["sound"] = "speakers: %d, mics: %d" % (len(sc.all_speakers()), len(sc.all_microphones()))
+    except Exception as e:
+        res["sound"] = "error: %r" % e
+    if sys.platform == "darwin" and getattr(sys, "frozen", False):
+        from .audio import tap_path
+        res["audiotap"] = bool(tap_path())
     tmp = tempfile.mkdtemp()
     try:
         res["loopback"] = _loopback(tmp)

@@ -33,6 +33,7 @@ rm -rf .venv-build build dist
 source .venv-build/bin/activate
 pip install --quiet --upgrade pip
 pip install --quiet pyinstaller certifi -r requirements.txt
+native/build.sh
 pyinstaller --noconfirm --log-level WARN Kvm.spec
 rm -rf "dist/Kvm"   # the .app is the deliverable on macOS
 

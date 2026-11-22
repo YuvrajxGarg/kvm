@@ -87,6 +87,9 @@ jobs:
         run: echo "${TAG#v}" > VERSION
       - run: pip install pyinstaller certifi -r requirements.txt
       - run: python -m unittest discover tests
+      - name: Native tools (macOS)
+        if: runner.os == 'macOS'
+        run: native/build.sh && test -x native-build/kvm-audiotap
       - run: pyinstaller --noconfirm --log-level WARN Kvm.spec
       - name: Smoke-test the built app
         run: |

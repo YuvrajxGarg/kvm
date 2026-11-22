@@ -78,6 +78,7 @@ class HelperProxy(Backend):
     name = "windows-service"
     can_capture = True
     can_inject = True
+    can_audio = True  # the helper plays and records in the signed-in session
 
     def __init__(self):
         self._proc = None
@@ -111,8 +112,10 @@ class HelperProxy(Backend):
         if c == "sas":
             send_sas()
             return
-        if c in ("config", "lock", "driven"):
+        if c in ("config", "lock", "driven", "capture"):
             self._state[c] = cmd
+        if c == "audio_capture":
+            self._state["audio_capture:%s" % cmd.get("src")] = cmd
         if c == "action" and cmd.get("a") == "lock":
             lock_session()
             return
@@ -151,7 +154,8 @@ class HelperProxy(Backend):
             self._fout = fout
         self._fin = fin
         threading.Thread(target=self._reader, args=(fin, proc), daemon=True).start()
-        for k in ("config", "lock"):
+        # A new helper (sign-in, switch user) picks up where the last one was.
+        for k in ("config", "lock", "capture", "audio_capture:output", "audio_capture:mic"):
             if k in self._state:
                 self._send(self._state[k])
 

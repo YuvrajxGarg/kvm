@@ -14,6 +14,7 @@ Events a backend sends:
   {"t": "clip", "kind": "text"|"png", "data"}   this computer's clipboard changed
   {"t": "screens", "rects"}                 the monitor layout changed
   {"t": "frame", "jpeg", "w", "h", "seq", "cursor"}   (sharing the screen) a new picture of it
+  {"t": "audio", "src", "pcm"} / {"t": "audio_err", ...}   sound (see kvm/audio.py)
   {"t": "log", "text"}
 """
 
@@ -37,6 +38,11 @@ class Backend(object):
     can_capture = False
     can_inject = False
 
+    @property
+    def can_audio(self):
+        from .. import audio
+        return audio.available()
+
     def __init__(self):
         self.sink = lambda ev: None
         self.watch_sides = []
@@ -59,6 +65,7 @@ class Backend(object):
         self._lock = threading.RLock()
         self._cap = None             # screen sharing settings while someone is watching
         self._cap_gen = 0
+        self._audio = None
 
     # ---- lifecycle -----------------------------------------------------------
     def start(self, sink):
@@ -84,6 +91,8 @@ class Backend(object):
     def stop(self):
         self.grab(False)
         self.release()
+        if self._audio:
+            self._audio.stop()
 
     def _poll_loop(self):
         n = 0
@@ -141,6 +150,16 @@ class Backend(object):
             self.capture(cmd)
         elif c == "abs":
             self.inject_abs(cmd["x"], cmd["y"])
+        elif c == "audio_capture":
+            self.audio().capture(cmd.get("src"), bool(cmd.get("on")))
+        elif c == "audio_play":
+            self.audio().play(cmd.get("sink"), base64.b64decode(cmd.get("pcm") or ""))
+
+    def audio(self):
+        if self._audio is None:
+            from ..audio import Audio
+            self._audio = Audio(self.sink)
+        return self._audio
 
     # ---- driving: what the platform capture calls -----------------------------
     def on_local_move(self, x, y, dx, dy):
@@ -452,7 +471,27 @@ class FakeBackend(Backend):
         self.cursor = (100.0, 100.0)
         self.posted = []
         self.clip = None
+        self.sound = []           # ("capture", src, on) / ("play", sink, pcm bytes)
+        self.audio_ok = True
         Backend.__init__(self)
+
+    @property
+    def can_audio(self):
+        return self.audio_ok
+
+    def audio(self):
+        be = self
+
+        class _A(object):
+            def capture(self, src, on):
+                be.posted.append(("audio_capture", src, on))
+
+            def play(self, sink, pcm):
+                be.sound.append((sink, pcm))
+
+            def stop(self):
+                pass
+        return _A()
 
     def _screens(self):
         return self.rects
