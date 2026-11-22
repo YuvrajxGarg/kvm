@@ -120,9 +120,9 @@ class PhonePairing(unittest.TestCase):
         main.msg({"t": "phone", "battery": 81, "charging": True, "model": "Pixel 9"})
         main.msg({"t": "notif", "key": "k1", "app": "WhatsApp", "title": "Mum", "text": "Dinner?", "ts": 1})
         main.msg({"t": "notif", "key": "k1", "app": "WhatsApp", "title": "Mum", "text": "Dinner? (2)", "ts": 2})
-        self.assertTrue(wait(lambda: len(self.mac.status()["peers"][0]["phone"]["notifs"]) == 1
+        # Wait for the second (updated) one: the messages arrive on the link's own thread.
+        self.assertTrue(wait(lambda: [n["text"] for n in self.mac.status()["peers"][0]["phone"]["notifs"]] == ["Dinner? (2)"]
                              and self.mac.status()["peers"][0]["phone"]["battery"] == 81))
-        self.assertEqual(self.mac.status()["peers"][0]["phone"]["notifs"][0]["text"], "Dinner? (2)")
         self.assertEqual(self.be.posted.count(("action", "notify")), 1)
         main.msg({"t": "notif_gone", "key": "k1"})
         self.assertTrue(wait(lambda: not self.mac.status()["peers"][0]["phone"]["notifs"]))
