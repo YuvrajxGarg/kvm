@@ -603,6 +603,9 @@ def mac_permissions(tap_ok=None):
         out["accessibility"] = bool(AXIsProcessTrusted())
     except Exception:
         pass
+    if tap_ok:
+        # The event tap only opens with both allowed; the preflight calls can lag behind Settings.
+        out["input_monitoring"] = out["accessibility"] = True
     if out.get("input_monitoring") is False:
         out["needs"].append("input_monitoring")
     if out.get("accessibility") is False:
