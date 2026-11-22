@@ -32,11 +32,13 @@ DEFAULTS = {
     "mic_accept": True,           # paired computers may send their microphone to this one's virtual mic
     "display_accept": True,       # paired computers may use this screen as an extra display
     "camera_share": True,         # paired computers may use this computer's camera
+    "phone_notifs": True,         # show a paired phone's notifications on this computer
 }
 SETTING_TYPES = {"clipboard": bool, "clipboard_images": bool, "swap_cmd_ctrl": bool, "cross_modifier": str,
                  "return_hotkey": str, "lock_key": str, "speed": float, "receive_dir": str, "files": bool,
                  "remote_actions": bool, "screen_share": bool, "screen_control": bool,
-                 "sound_share": bool, "mic_accept": bool, "display_accept": bool, "camera_share": bool}
+                 "sound_share": bool, "mic_accept": bool, "display_accept": bool, "camera_share": bool,
+                 "phone_notifs": bool}
 
 
 def user_data_dir():

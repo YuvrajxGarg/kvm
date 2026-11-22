@@ -294,3 +294,13 @@ kbd { font: 600 11px ui-monospace, "SF Mono", Menlo, Consolas, monospace; paddin
 #drop-veil { position: fixed; inset: 0; z-index: 30; pointer-events: none; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 30px; }
 #drop-veil > div { display: flex; gap: 10px; align-items: center; padding: 10px 18px; border-radius: 999px; background: var(--accent); color: #000; }
 #drop-veil svg.i { stroke-width: 2.2; }
+
+/* ---------- phones ---------- */
+.qr { align-self: center; background: #fff; border-radius: 14px; padding: 10px; line-height: 0; }
+.qr svg { width: 240px; height: 240px; }
+.center { text-align: center; }
+.notifs { display: flex; flex-direction: column; gap: 6px; max-height: 420px; overflow: auto; }
+.notif { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 12px; background: var(--card, rgba(255,255,255,.04)); }
+.notif .t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.notif .t b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.notif .t span { opacity: .8; overflow-wrap: anywhere; }

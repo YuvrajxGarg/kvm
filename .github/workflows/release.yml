@@ -5,6 +5,7 @@
 # What people download (installer/ builds these):
 #   macOS   -> Kvm.dmg          (drag to Applications)
 #   Windows -> Kvm-Setup.exe    (setup wizard)
+#   Android -> Kvm-Android.apk  (the phone app; it updates itself from this too)
 # What installed copies update from (keep these: every existing install uses them):
 #   macOS   -> Kvm-mac.zip      + .sha256
 #   Windows -> Kvm-windows.zip  + .sha256
@@ -132,8 +133,47 @@ jobs:
           else files="dist/Kvm-windows.zip* dist/Kvm-Setup.exe*"; fi
           gh release upload "$TAG" $files --clobber
 
+  android:
+    needs: release
+    if: needs.release.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.ref }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
+      - name: Set version from the tag
+        run: echo "${TAG#v}" > VERSION
+      - name: Build Kvm for Android
+        env:
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          KVM_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE" ]; then
+            echo "$ANDROID_KEYSTORE" | base64 -d > "$RUNNER_TEMP/kvm.jks"
+            export KVM_KEYSTORE="$RUNNER_TEMP/kvm.jks"
+          else
+            echo "::warning::No ANDROID_KEYSTORE secret: the APK is signed with a throwaway key and won't update an installed copy."
+          fi
+          gradle -p android --no-daemon :core:test :app:assembleRelease
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk Kvm-Android.apk
+          sha256sum Kvm-Android.apk > Kvm-Android.apk.sha256
+          gh release upload "$TAG" Kvm-Android.apk Kvm-Android.apk.sha256 --clobber
+
   publish:
-    needs: [release, build]
+    needs: [release, build, android]
     runs-on: ubuntu-latest
     steps:
       - name: Publish the release now that both apps are attached
