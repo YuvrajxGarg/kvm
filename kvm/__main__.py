@@ -10,14 +10,24 @@ def run():
         sys.stderr = open(os.devnull, "w")
     args = [a for a in sys.argv[1:] if not a.startswith("-psn")]
     if args and args[0] == "service-run":
-        from .winservice import service_main
+        from .winservice import service_log_path, service_main
 
+        try:  # anything the service prints (a crash on import, say) lands in its log
+            os.makedirs(os.path.dirname(service_log_path()), exist_ok=True)
+            sys.stderr = sys.stdout = open(service_log_path(), "a", encoding="utf-8", buffering=1)
+        except OSError:
+            pass
         service_main()
         return
     if args and args[0] in ("service-install", "service-remove"):
         from . import winservice
 
-        sys.exit(winservice.install_service() if args[0] == "service-install" else winservice.remove_service())
+        try:
+            sys.exit(winservice.install_service() if args[0] == "service-install" else winservice.remove_service())
+        except Exception:
+            import traceback
+            winservice.slog("%s failed:\n%s" % (args[0], traceback.format_exc()))
+            sys.exit(1)
     if args and args[0] == "helper":
         from .winservice import helper_main
 

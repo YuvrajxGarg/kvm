@@ -294,6 +294,25 @@ def user_home():
         return None
 
 
+def service_log_path():
+    from .store import service_data_dir
+    return os.path.join(service_data_dir(), "service.log")
+
+
+def slog(msg):
+    """The service's own log (%ProgramData%\\PXLVZN\\Kvm\\service.log): it has no console, and a
+    service that won't start is otherwise silent."""
+    try:
+        path = service_log_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if os.path.exists(path) and os.path.getsize(path) > 512 * 1024:
+            os.replace(path, path + ".old")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg))
+    except Exception:
+        pass
+
+
 def run_agent_forever(stop_event):
     from . import control
     from .store import Store, service_data_dir
@@ -301,9 +320,13 @@ def run_agent_forever(stop_event):
     folder = service_data_dir()
     os.makedirs(folder, exist_ok=True)
     _lock_down(folder)
+    slog("starting the agent")
     agent = ServiceAgent(HelperProxy(), Store(folder)).start()
+    slog("agent listening on %s" % agent.port)
     srv = control.serve(agent, folder)
+    slog("control endpoint up")
     stop_event.wait()
+    slog("stopping")
     srv.shutdown()
     agent.stop()
 
@@ -362,12 +385,25 @@ def service_main():
             try:
                 run_agent_forever(self.stop_event)
             except Exception as e:
+                import traceback
+                slog("service stopped:\n" + traceback.format_exc())
                 servicemanager.LogErrorMsg("Kvm service stopped: %r" % e)
                 raise
 
-    servicemanager.Initialize()
-    servicemanager.PrepareToHostSingle(KvmService)
-    servicemanager.StartServiceCtrlDispatcher()
+    slog("service-run (Kvm %s, pid %d)" % (_version(), os.getpid()))
+    try:
+        servicemanager.Initialize()
+        servicemanager.PrepareToHostSingle(KvmService)
+        servicemanager.StartServiceCtrlDispatcher()
+    except Exception:
+        import traceback
+        slog("service dispatcher failed:\n" + traceback.format_exc())
+        raise
+
+
+def _version():
+    from . import __version__
+    return __version__
 
 
 def service_installed():

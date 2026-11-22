@@ -21,7 +21,16 @@ $svc = $null
 for ($i = 0; $i -lt 30; $i++) { $svc = Get-Service -Name $App -ErrorAction SilentlyContinue; if ($svc -and $svc.Status -eq 'Running') { break }; Start-Sleep 1 }
 if (-not $svc) { throw "the Kvm service isn't registered" }
 Write-Host "service: $($svc.Status), $((Get-CimInstance Win32_Service -Filter "Name='$App'").PathName)"
-if ($svc.Status -ne 'Running') { throw "the Kvm service didn't start" }
+if ($svc.Status -ne 'Running') {
+  Write-Host "-- service.log"; Get-Content "$env:ProgramData\PXLVZN\Kvm\service.log" -ErrorAction SilentlyContinue | Out-Host
+  Write-Host "-- events"
+  Get-WinEvent -FilterHashtable @{LogName = 'System'; ProviderName = 'Service Control Manager'; StartTime = (Get-Date).AddMinutes(-10)} -ErrorAction SilentlyContinue |
+    Where-Object { $_.Message -match 'Kvm' } | Select-Object -First 10 | Format-List TimeCreated, Id, Message | Out-Host
+  Get-WinEvent -FilterHashtable @{LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-10)} -ErrorAction SilentlyContinue |
+    Where-Object { $_.Message -match 'Kvm|Python|pywin' } | Select-Object -First 10 | Format-List TimeCreated, ProviderName, Message | Out-Host
+  Write-Host "-- setup log"; Get-Content "$env:TEMP\$App-setup.log" -Tail 40 -ErrorAction SilentlyContinue | Out-Host
+  throw "the Kvm service didn't start"
+}
 if ((Get-CimInstance Win32_Service -Filter "Name='$App'").StartName -ne 'LocalSystem') { throw "the service must run as LocalSystem" }
 
 Write-Host "== the service answers the window"

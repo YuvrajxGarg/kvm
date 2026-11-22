@@ -164,7 +164,7 @@ class Agent(object):
             return {
                 "me": {"id": self._store.id, "name": self._store.name, "platform": this_platform(),
                        "version": __version__, "screens": self._screens, "port": self._port,
-                       "addresses": _lan_addresses()},
+                       "addresses": _cached_addresses()},
                 "mode": self._mode, "active": self._active, "side": self._side, "locked": self._locked,
                 "peers": peers, "pairing": pairing,
                 "transfers": sorted(self._transfers.values(), key=lambda t: -t["started"])[:20],
@@ -1054,6 +1054,32 @@ def _unique_path(path):
     if not os.path.exists(path):
         return path
     return os.path.join(os.path.dirname(path), _unique(os.path.dirname(path), os.path.basename(path)))
+
+
+_ADDR = {"at": 0.0, "list": [], "busy": False}
+_ADDR_LOCK = threading.Lock()
+
+
+def _cached_addresses(max_age=30.0):
+    """This computer's addresses for status(), which the window polls several times a second.
+    Looking them up can take seconds (the hostname lookup goes through mDNS on a Mac), so they're
+    refreshed in the background and status() never waits for it."""
+    with _ADDR_LOCK:
+        stale = time.time() - _ADDR["at"] > max_age
+        if stale and not _ADDR["busy"]:
+            _ADDR["busy"] = True
+            threading.Thread(target=_refresh_addresses, daemon=True).start()
+        return list(_ADDR["list"])
+
+
+def _refresh_addresses():
+    try:
+        found = _lan_addresses()
+    finally:
+        with _ADDR_LOCK:
+            _ADDR["busy"] = False
+    with _ADDR_LOCK:
+        _ADDR["list"], _ADDR["at"] = found, time.time()
 
 
 def _lan_addresses():
