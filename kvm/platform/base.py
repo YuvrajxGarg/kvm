@@ -15,6 +15,7 @@ Events a backend sends:
   {"t": "screens", "rects"}                 the monitor layout changed
   {"t": "frame", "jpeg", "w", "h", "seq", "cursor"}   (sharing the screen) a new picture of it
   {"t": "audio", "src", "pcm"} / {"t": "audio_err", ...}   sound (see kvm/audio.py)
+  {"t": "vdisplay", "on", "rect", "error"}  the extra (virtual) display for extending onto another computer
   {"t": "log", "text"}
 """
 
@@ -149,7 +150,9 @@ class Backend(object):
         elif c == "capture":
             self.capture(cmd)
         elif c == "abs":
-            self.inject_abs(cmd["x"], cmd["y"])
+            self.inject_abs(cmd["x"], cmd["y"], cmd.get("rect"))
+        elif c == "vdisplay":
+            self.vdisplay(cmd)
         elif c == "audio_capture":
             self.audio().capture(cmd.get("src"), bool(cmd.get("on")))
         elif c == "audio_play":
@@ -296,11 +299,13 @@ class Backend(object):
                 pass
         self.buttons_inj = set()
 
-    def inject_abs(self, fx, fy):
-        """Put the pointer at a point given as fractions of the whole desktop (from a screen viewer)."""
+    def inject_abs(self, fx, fy, rect=None):
+        """Put the pointer at a point given as fractions of the whole desktop, or of `rect` (x, y, w, h),
+        from a screen viewer."""
         sc = self.screens
-        x = sc.left + max(0.0, min(1.0, float(fx))) * (sc.right - sc.left)
-        y = sc.top + max(0.0, min(1.0, float(fy))) * (sc.bottom - sc.top)
+        left, top, w, h = rect if rect else (sc.left, sc.top, sc.right - sc.left, sc.bottom - sc.top)
+        x = left + max(0.0, min(1.0, float(fx))) * w
+        y = top + max(0.0, min(1.0, float(fy))) * h
         x, y = sc.clamp(x, y)
         self.pos = (x, y)
         self._post_move(x, y, set(self.buttons_inj))
@@ -313,8 +318,10 @@ class Backend(object):
             if not cmd.get("on"):
                 self._cap = None
                 return
+            rect = cmd.get("rect")
             self._cap = {"fps": max(1.0, min(30.0, float(cmd.get("fps") or 12))),
-                         "maxw": int(cmd.get("maxw") or 1600), "q": int(cmd.get("q") or 70)}
+                         "maxw": int(cmd.get("maxw") or 1600), "q": int(cmd.get("q") or 70),
+                         "rect": [float(v) for v in rect] if rect else None}
             gen = self._cap_gen
         threading.Thread(target=self._capture_loop, args=(gen,), name="kvm-capture", daemon=True).start()
 
@@ -328,7 +335,7 @@ class Backend(object):
                 cap = dict(self._cap)
             t0 = time.time()
             try:
-                img = self._grab_screen()
+                img = self._grab_region(cap["rect"]) if cap["rect"] else self._grab_screen()
                 fails = 0
             except Exception as e:
                 img = None
@@ -336,7 +343,7 @@ class Backend(object):
                 if fails in (1, 10, 100):
                     self.sink({"t": "log", "text": "screen capture: %r" % e})
             if img is not None:
-                cur = self._cursor_frac()
+                cur = self._cursor_frac(cap["rect"])
                 if cur:
                     draw_pointer(img, cur[0] * img.size[0], cur[1] * img.size[1])
                 jpeg, w, h = encode_jpeg(img, cap["maxw"], cap["q"])
@@ -349,12 +356,32 @@ class Backend(object):
                                "seq": seq, "cursor": cur})
             time.sleep(max(0.005, 1.0 / cap["fps"] - (time.time() - t0)))
 
-    def _cursor_frac(self):
+    def _cursor_frac(self, rect=None):
         cur = self._cursor()
         sc = self.screens
-        if cur is None or sc.right <= sc.left or sc.bottom <= sc.top:
+        left, top, w, h = rect if rect else (sc.left, sc.top, sc.right - sc.left, sc.bottom - sc.top)
+        if cur is None or w <= 0 or h <= 0:
             return None
-        return [(cur[0] - sc.left) / (sc.right - sc.left), (cur[1] - sc.top) / (sc.bottom - sc.top)]
+        fx, fy = (cur[0] - left) / w, (cur[1] - top) / h
+        if rect and not (0 <= fx <= 1 and 0 <= fy <= 1):
+            return None  # the pointer is on another display
+        return [fx, fy]
+
+    def _grab_region(self, rect):
+        """A PIL image of part of the desktop, (x, y, w, h) in desktop coordinates."""
+        img = self._grab_screen()
+        if img is None:
+            return None
+        sc = self.screens
+        k = img.size[0] / max(1.0, sc.right - sc.left)  # pixels per point (2 on a Retina Mac)
+        x, y, w, h = rect
+        box = (int((x - sc.left) * k), int((y - sc.top) * k), int((x - sc.left + w) * k), int((y - sc.top + h) * k))
+        return img.crop(box)
+
+    # ---- extending this computer onto another (an extra, virtual display) ---------------
+    def vdisplay(self, cmd):
+        if cmd.get("on"):
+            self.sink({"t": "vdisplay", "on": False, "error": "This computer can't add an extra display yet."})
 
     def _capture_thread_init(self):
         pass
@@ -465,6 +492,7 @@ class FakeBackend(Backend):
     name = "fake"
     can_capture = True
     can_inject = True
+    can_vdisplay = True
 
     def __init__(self, rects=((0, 0, 1920, 1080),)):
         self.rects = [tuple(r) for r in rects]
@@ -528,6 +556,20 @@ class FakeBackend(Backend):
 
     def sas(self):
         self.posted.append(("sas",))
+
+    def vdisplay(self, cmd):
+        base = [r for r in self.rects if not getattr(self, "_vrect", None) or tuple(r) != self._vrect]
+        if cmd.get("on"):
+            right = max(r[0] + r[2] for r in base)
+            self._vrect = (right, 0.0, float(cmd.get("w") or 1920), float(cmd.get("h") or 1080))
+            self.rects = base + [self._vrect]
+        else:
+            self._vrect = None
+            self.rects = base
+        self.screens = Screens(self.rects)
+        self.posted.append(("vdisplay", bool(cmd.get("on"))))
+        self.sink({"t": "screens", "rects": self.screens.public()})
+        self.sink({"t": "vdisplay", "on": bool(cmd.get("on")), "rect": list(self._vrect) if self._vrect else None})
 
     def _grab_screen(self):
         from PIL import Image

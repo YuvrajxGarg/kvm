@@ -86,6 +86,9 @@ class Agent(object):
         self._listeners = set()            # pids hearing this computer
         self._mic_out = {}                 # pid -> {"phase", "error"}: our mic goes to that computer
         self._mic_in = set()               # pids whose mic plays into our virtual mic
+        self._extend_out = {}              # pid -> {"phase", "error", "w", "h"}: our extra display shows there
+        self._extend_in = {}               # pid -> {"w", "h"}: that computer's extra display shows here
+        self._vrect = None                 # where our extra display is on our desktop
 
     # ==== lifecycle ==============================================================
     def start(self):
@@ -190,6 +193,9 @@ class Agent(object):
                           "listeners": [{"id": pid, "name": self._peer_name(pid)} for pid in self._listeners],
                           "mic_in": [{"id": pid, "name": self._peer_name(pid)} for pid in self._mic_in],
                           "available": bool(self._backend.can_audio)},
+                "extend": {"out": {pid: dict(v) for pid, v in self._extend_out.items()},
+                           "in": [dict(v, id=pid, name=self._peer_name(pid)) for pid, v in self._extend_in.items()],
+                           "can": bool(getattr(self._backend, "can_vdisplay", False))},
             }
 
     def rename(self, name):
@@ -591,7 +597,7 @@ class Agent(object):
     # its screen and sends each one over the "media" link. Only the newest picture is ever
     # queued, so a slow network shows fewer frames, never old ones. Input from the viewer
     # window arrives as "vin" and is put on the screen like any other.
-    def view_start(self, pid, fps=12, maxw=1600, quality=65):
+    def view_start(self, pid, fps=12, maxw=1600, quality=65, region=None):
         """Start watching a paired computer's screen. Returns the local address of its picture stream."""
         with self._lock:
             p = self._peers.get(pid)
@@ -606,6 +612,8 @@ class Agent(object):
                                         "jpeg": None, "cond": threading.Condition(), "since": time.time()}
             v["url"] = self._view_server.url(pid)
             v["req"] = {"t": "view", "on": True, "fps": fps, "maxw": maxw, "q": quality}
+            if region:
+                v["req"]["region"] = region
         p.main.msg(v["req"])
         return v["url"]
 
@@ -673,7 +681,8 @@ class Agent(object):
                     w = self._watchers[pid] = {"latest": None, "event": threading.Event(), "on": True}
                     threading.Thread(target=self._watcher_sender, args=(pid, w), name="kvm-view-send", daemon=True).start()
                     self._notice("%s is looking at this screen." % self._peer_name(pid))
-                w["req"] = {"fps": m.get("fps") or 12, "maxw": m.get("maxw") or 1600, "q": m.get("q") or 65}
+                w["req"] = {"fps": m.get("fps") or 12, "maxw": m.get("maxw") or 1600, "q": m.get("q") or 65,
+                            "region": m.get("region")}
             link.msg({"t": "view_ok", "control": bool(self._store.get("screen_control") and self._backend.can_inject)})
             self._retune_capture()
             if not self._media_ok(pid) and link.dialer == self._store.id:  # whoever dialled main dials media
@@ -684,7 +693,9 @@ class Agent(object):
                 return
             k = m.get("k")
             if k == "abs":
-                self._backend.handle({"c": "abs", "x": float(m.get("x", 0)), "y": float(m.get("y", 0))})
+                req = self._watchers[pid].get("req") or {}
+                rect = self._vrect if req.get("region") == "extend" else None
+                self._backend.handle({"c": "abs", "x": float(m.get("x", 0)), "y": float(m.get("y", 0)), "rect": rect})
             elif k == "button":
                 self._backend.handle({"c": "button", "b": int(m.get("b", 1)), "d": bool(m.get("d"))})
             elif k == "wheel":
@@ -721,8 +732,10 @@ class Agent(object):
         if not reqs:
             self._backend.handle({"c": "capture", "on": False})
             return
+        # While extending, the extra display is what's sent (to everyone watching).
+        rect = self._vrect if any(r.get("region") == "extend" for r in reqs) else None
         self._backend.handle({"c": "capture", "on": True, "fps": max(r["fps"] for r in reqs),
-                              "maxw": max(r["maxw"] for r in reqs), "q": max(r["q"] for r in reqs)})
+                              "maxw": max(r["maxw"] for r in reqs), "q": max(r["q"] for r in reqs), "rect": rect})
 
     def _drop_watcher(self, pid):
         with self._lock:
@@ -759,6 +772,93 @@ class Agent(object):
                         break
             if link:
                 link.blob(frame[0], frame[1])
+
+    # ==== extending this computer onto another ======================================
+    # This computer adds an extra display (a virtual one, on a Mac) and the other computer shows
+    # it full screen, like a monitor plugged in over the network. It's a screen view of just that
+    # display ("region": "extend"), so the picture, the pointer and clicks from there all work the
+    # same way. Our keyboard and mouse simply move onto the extra display like any other.
+    def extend_start(self, pid, w=None, h=None):
+        """Use that computer's screen as an extra display for this one."""
+        p = self._connected(pid)
+        if not getattr(self._backend, "can_vdisplay", False):
+            raise RuntimeError("Only a Mac can extend onto another computer for now.")
+        if not (w and h):
+            rects = sorted(p.screens or [], key=lambda r: -r[2] * r[3])
+            w, h = (int(rects[0][2]), int(rects[0][3])) if rects else (1920, 1080)
+        with self._lock:
+            for other in list(self._extend_out):
+                if other != pid:
+                    self.extend_stop(other)
+            self._extend_out[pid] = {"phase": "starting", "error": None, "w": int(w), "h": int(h)}
+        self._backend.handle({"c": "vdisplay", "on": True, "w": int(w), "h": int(h)})
+        return True
+
+    def extend_stop(self, pid):
+        with self._lock:
+            had = self._extend_out.pop(pid, None)
+            left = bool(self._extend_out)
+        if had:
+            p = self._peers.get(pid)
+            if p and p.main and not p.main.closed:
+                p.main.msg({"t": "extend", "on": False})
+            if not left:
+                self._backend.handle({"c": "vdisplay", "on": False})
+        return True
+
+    def extend_end(self, pid):
+        """(Showing another computer's display) close it: that computer removes its extra display."""
+        with self._lock:
+            had = self._extend_in.pop(pid, None)
+        self.view_stop(pid)
+        p = self._peers.get(pid)
+        if had and p and p.main and not p.main.closed:
+            p.main.msg({"t": "extend_refused", "why": "closed"})
+        return True
+
+    def _on_vdisplay(self, ev):
+        with self._lock:
+            self._vrect = ev.get("rect") if ev.get("on") else None
+            out = list(self._extend_out.items())
+        for pid, v in out:
+            p = self._peers.get(pid)
+            if ev.get("on") and self._vrect:
+                v.update(phase="live", error=None)
+                if p and p.main and not p.main.closed:
+                    p.main.msg({"t": "extend", "on": True, "w": v["w"], "h": v["h"]})
+            elif ev.get("error"):
+                v.update(phase="failed", error=ev["error"])
+                if p and p.main and not p.main.closed:
+                    p.main.msg({"t": "extend", "on": False})
+        self._retune_capture()
+
+    def _on_extend_msg(self, pid, link, m):
+        t = m.get("t")
+        if t == "extend_refused":
+            v = self._extend_out.get(pid)
+            if m.get("why") == "closed":
+                self.extend_stop(pid)
+            elif v:
+                v.update(phase="refused", error="%s doesn't take an extra display. Turn it on in Kvm settings there."
+                         % self._peer_name(pid))
+                self._backend.handle({"c": "vdisplay", "on": False})
+            return
+        if not m.get("on"):
+            with self._lock:
+                had = self._extend_in.pop(pid, None)
+            if had:
+                self.view_stop(pid)
+            return
+        if not self._store.get("display_accept"):
+            link.msg({"t": "extend_refused", "why": "off"})
+            return
+        w, h = int(m.get("w") or 1920), int(m.get("h") or 1080)
+        with self._lock:
+            new = pid not in self._extend_in
+            self._extend_in[pid] = {"w": w, "h": h}
+        if new:
+            self._notice("%s is using this screen as a display." % self._peer_name(pid))
+        self.view_start(pid, fps=30, maxw=w, quality=75, region="extend")
 
     # ==== sound ====================================================================
     # Hearing a computer: we ask ("listen"); it records what it plays and sends 20 ms blocks of
@@ -1140,6 +1240,7 @@ class Agent(object):
                         v.update(phase="reconnecting")
                 self._drop_watcher(link.peer_id)
                 self._drop_listener(link.peer_id)
+                self._extend_in.pop(link.peer_id, None)
                 self._drop_mic_in(link.peer_id)
                 self._retune_mic()
                 if self._active == link.peer_id:
@@ -1263,6 +1364,9 @@ class Agent(object):
         if t in ("view", "vin", "view_ok", "view_refused", "frame"):
             self._on_view_msg(pid, link, m)
             return
+        if t in ("extend", "extend_refused"):
+            self._on_extend_msg(pid, link, m)
+            return
         if t in ("listen", "listen_ok", "listen_refused", "mic", "mic_ok", "mic_refused", "pcm"):
             self._on_sound_msg(pid, link, m)
             return
@@ -1374,6 +1478,9 @@ class Agent(object):
             return
         if t == "audio_err":
             self._on_audio_err(ev)
+            return
+        if t == "vdisplay":
+            self._on_vdisplay(ev)
             return
         if t == "log":
             self._log(ev.get("text"))

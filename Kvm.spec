@@ -28,9 +28,11 @@ elif sys.platform == "win32":
 excludes = ["tkinter", "_tkinter", "matplotlib", "scipy"]
 if sys.platform == "darwin":
     # The Mac's own sound (what it plays) comes from a small ScreenCaptureKit tool built by build_mac.sh.
-    tap = os.path.join(root, "native-build", "kvm-audiotap")
-    if os.path.exists(tap):
-        binaries.append((tap, "."))
+    # The extra display for "Extend this Mac" comes from kvm-vdisplay.
+    for tool in ("kvm-audiotap", "kvm-vdisplay"):
+        path = os.path.join(root, "native-build", tool)
+        if os.path.exists(path):
+            binaries.append((path, "."))
 
 a = Analysis(
     [os.path.join(root, "Kvm.py")],

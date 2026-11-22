@@ -66,6 +66,7 @@ class MacBackend(Backend):
     name = "mac"
     can_capture = True
     can_inject = True
+    can_vdisplay = True  # CGVirtualDisplay, through kvm-vdisplay
 
     def __init__(self):
         self._tap = None
@@ -444,6 +445,70 @@ class MacBackend(Backend):
                 os.remove(path)
             except OSError:
                 pass
+
+
+    def _grab_region(self, rect):
+        """Only the given part of the desktop (the extra display while extending)."""
+        from PIL import Image
+        try:
+            x, y, w, h = rect
+            img = Quartz.CGWindowListCreateImage(Quartz.CGRectMake(x, y, w, h), Quartz.kCGWindowListOptionOnScreenOnly,
+                                                 Quartz.kCGNullWindowID, Quartz.kCGWindowImageDefault)
+            if img is not None:
+                iw, ih = Quartz.CGImageGetWidth(img), Quartz.CGImageGetHeight(img)
+                bpr = Quartz.CGImageGetBytesPerRow(img)
+                data = Quartz.CGDataProviderCopyData(Quartz.CGImageGetDataProvider(img))
+                return Image.frombuffer("RGB", (iw, ih), bytes(data), "raw", "BGRX", bpr, 1)
+        except Exception:
+            pass
+        return Backend._grab_region(self, rect)
+
+    # ---- extending this Mac onto another computer --------------------------------------
+    def vdisplay(self, cmd):
+        threading.Thread(target=self._vdisplay, args=(dict(cmd),), name="kvm-vdisplay", daemon=True).start()
+
+    def _vdisplay(self, cmd):
+        from ..audio import native_tool
+        old = getattr(self, "_vproc", None)
+        self._vproc = None
+        if old:
+            try:
+                old.stdin.close()
+                old.wait(3)
+            except Exception:
+                old.kill()
+        if not cmd.get("on"):
+            self.sink({"t": "vdisplay", "on": False, "rect": None})
+            return
+        tool = native_tool("kvm-vdisplay")
+        if not tool:
+            self.sink({"t": "vdisplay", "on": False, "error": "This copy of Kvm can't add a display (kvm-vdisplay is missing)."})
+            return
+        w, h = int(cmd.get("w") or 1920), int(cmd.get("h") or 1080)
+        proc = subprocess.Popen([tool, str(w), str(h), "1" if cmd.get("hidpi") else "0"], stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        line = proc.stdout.readline().decode("ascii", "replace").split()
+        if len(line) != 2 or line[0] != "id":
+            err = (proc.stderr.read() or b"").decode("utf-8", "replace").strip()
+            self.sink({"t": "vdisplay", "on": False, "error": "Couldn't add a display to this Mac (%s)." % (err or "no reply")})
+            return
+        self._vproc = proc
+        did = int(line[1])
+        rect = None
+        for _ in range(40):  # macOS takes a moment to place the new display
+            b = Quartz.CGDisplayBounds(did)
+            if b.size.width > 0:
+                rect = [b.origin.x, b.origin.y, b.size.width, b.size.height]
+                break
+            time.sleep(0.05)
+        self.sink({"t": "vdisplay", "on": True, "rect": rect, "id": did})
+
+        def watch():
+            proc.wait()
+            if self._vproc is proc:
+                self._vproc = None
+                self.sink({"t": "vdisplay", "on": False, "rect": None, "error": "The extra display went away."})
+        threading.Thread(target=watch, daemon=True).start()
 
 
 def mac_permissions(tap_ok=None):

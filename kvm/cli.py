@@ -54,8 +54,9 @@ def _selftest(out):
     except Exception as e:
         res["sound"] = "error: %r" % e
     if sys.platform == "darwin" and getattr(sys, "frozen", False):
-        from .audio import tap_path
+        from .audio import native_tool, tap_path
         res["audiotap"] = bool(tap_path())
+        res["vdisplay_tool"] = bool(native_tool("kvm-vdisplay"))
     tmp = tempfile.mkdtemp()
     try:
         res["loopback"] = _loopback(tmp)

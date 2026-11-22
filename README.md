@@ -27,6 +27,9 @@ Copy on one, paste on the other. Send files across. No account, no cloud.</p>
   computer's microphone there** (the mic button): apps on that computer pick "CABLE Output" (Windows, with the free
   [VB-CABLE](https://vb-audio.com/Cable/)) or "BlackHole 2ch" (Mac, with the free
   [BlackHole](https://existential.audio/blackhole/)) as their microphone. Hearing a Mac needs macOS 13 or later.
+- **Use the PC as an extra display for the Mac** (… › Use as a display): the Mac gets a new display the size of the
+  PC's monitor, and the PC shows it full screen. Drag windows onto it and move the pointer there like any display;
+  the PC's own mouse and keyboard work on it too. Close it on the PC, or press Stop on the Mac, to end it.
 - **Ring, lock or sleep** the other computer.
 - **Cursor lock** (F14 on a Mac keyboard, Scroll Lock on a PC) keeps the pointer where it is, **hold a key to cross**
   makes edges cross only while a key is held, and <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Esc</kbd> brings the pointer
@@ -75,7 +78,8 @@ kvm/platform/       mac.py (Quartz), win.py (hooks + SendInput), base.py (shared
 kvm/winservice.py   the Windows service and its helper           kvm/control.py  window <-> service
 kvm/viewserver.py   the other screen's live picture, to the viewer window (127.0.0.1, token)
 kvm/audio.py        sound: 48 kHz stereo in 20 ms blocks, WASAPI loopback / CoreAudio, virtual mic
-native/             kvm-audiotap.swift: what a Mac is playing (ScreenCaptureKit), built by native/build.sh
+native/             kvm-audiotap.swift: what a Mac is playing (ScreenCaptureKit); kvm-vdisplay.swift: an extra
+                    display (CGVirtualDisplay); built by native/build.sh
 kvm/ui/             the window (open index.html?demo in a browser for a preview)
 ```
 
@@ -87,8 +91,9 @@ Develop: `pip install -r requirements.txt`, `python Kvm.py` (window), `python Kv
 Kvm is growing towards everything [TwinDesk](https://github.com/InukaAsith/TwinDesk) does, in phases:
 
 1. **Done:** keyboard and mouse across Mac and Windows (including admin prompts and the sign-in screen), clipboard
-   with pictures, files, ring, lock and sleep, seeing and controlling the other screen, its sound and microphone.
-2. Extended display and camera.
+   with pictures, files, ring, lock and sleep, seeing and controlling the other screen, its sound and microphone,
+   and the PC as an extra display for the Mac.
+2. Extended display the other way (a PC extending onto a Mac needs a Windows display driver), and camera.
 3. Android: a phone as a full peer (calls, texts, notifications, photos, its screen).
 4. iPhone through the browser, AirPlay receiver on Windows, continue-where-you-left-off, many devices at once, Linux.
 

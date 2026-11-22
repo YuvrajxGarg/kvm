@@ -1,10 +1,13 @@
 #!/bin/bash
 # Builds Kvm's small native tools into native-build/ (macOS only; Kvm.spec bundles them).
 #   kvm-audiotap  what the Mac is playing, for "Hear this Mac" (ScreenCaptureKit, macOS 13+)
+#   kvm-vdisplay  an extra display, for "Extend this Mac onto ..." (CGVirtualDisplay)
 set -e
 cd "$(dirname "$0")/.."
 [ "$(uname)" = "Darwin" ] || { echo "native tools are for macOS"; exit 0; }
 mkdir -p native-build
 swiftc -O -target "$(uname -m)-apple-macos13.0" -framework ScreenCaptureKit -framework CoreMedia \
   -o native-build/kvm-audiotap native/kvm-audiotap.swift
-echo "Built native-build/kvm-audiotap"
+swiftc -O -target "$(uname -m)-apple-macos12.0" -import-objc-header native/CGVirtualDisplay.h \
+  -o native-build/kvm-vdisplay native/kvm-vdisplay.swift
+echo "Built native-build/kvm-audiotap, native-build/kvm-vdisplay"

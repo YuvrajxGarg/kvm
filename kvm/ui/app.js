@@ -139,8 +139,18 @@
         if (v.error && !soundErrs.has(k)) { soundErrs.add(k); toast(v.error, true); }
       }
     }
+    // another computer extending onto this one: show its display full screen (and close it when it stops)
+    const ext = a.extend || {};
+    const want = new Set((ext.in || []).map((x) => x.id));
+    for (const id of want) if (!displays.has(id)) { displays.add(id); api.open_display(id); }
+    for (const id of [...displays]) if (!want.has(id)) { displays.delete(id); api.close_display(id); }
+    for (const [pid, v] of Object.entries(ext.out || {})) {
+      const k = 'ext' + pid + (v.error || '');
+      if (v.error && !soundErrs.has(k)) { soundErrs.add(k); toast(v.error, true); }
+    }
     renderPairing(a);
   }
+  const displays = new Set();
   const soundErrs = new Set();
 
   function hk(s) {
@@ -172,6 +182,13 @@
     for (const w of snd.mic_in || []) {
       out.push(`<div class="banner info">${icon('mic')}<div class="t"><b>${esc(w.name)}’s microphone is on here</b>
         <span>Apps here can use it: pick ${info.platform === 'darwin' ? '“BlackHole”' : '“CABLE Output”'} as the microphone.</span></div></div>`);
+    }
+    for (const [pid, v] of Object.entries(((a && a.extend) || {}).out || {})) {
+      if (v.phase !== 'live' && v.phase !== 'starting') continue;
+      const p = (a.peers || []).find((x) => x.id === pid) || {};
+      out.push(`<div class="banner info">${icon('monitor')}<div class="t"><b>${v.phase === 'live' ? 'Using ' + esc(p.name || 'the other computer') + ' as a display' : 'Adding a display…'}</b>
+        <span>Move the pointer onto it like any other display. Arrange it in System Settings › Displays.</span></div>
+        <button class="btn-quiet" data-act="extend-stop" data-pid="${pid}">Stop</button></div>`);
     }
     for (const w of (a && a.watchers) || []) {
       out.push(`<div class="banner info">${icon('monitor')}<div class="t"><b>${esc(w.name)} is looking at this screen</b>
@@ -384,6 +401,7 @@
         ${opt('Ring, lock and sleep from paired computers', 'Lets a paired computer find, lock or put this one to sleep.', s.remote_actions, 'remote_actions')}
         ${opt('Share this screen', 'Paired computers can see this screen in a Kvm window.', s.screen_share, 'screen_share')}
         ${opt('Allow control from the viewer', 'They can also click and type on it from that window.', s.screen_control, 'screen_control')}
+        ${opt('Be a display for paired computers', 'A paired Mac can use this screen as an extra display. It opens full screen; close it to stop.', s.display_accept, 'display_accept')}
         ${opt('Share this computer’s sound', 'Paired computers can hear what plays here.', s.sound_share, 'sound_share')}
         ${opt('Take a microphone from paired computers', isMac ? 'Their microphone plays into BlackHole, so apps here can use it.' : 'Their microphone plays into VB-CABLE, so apps here can use it.', s.mic_accept, 'mic_accept')}
       </div>
@@ -449,6 +467,9 @@
         const p = (st.agent.peers || []).find((x) => x.id === pid) || {};
         openMenu(b, [
           { icon: 'monitor', label: `See ${p.name}'s screen`, run: () => api.open_viewer(pid) },
+          ...((st.agent.extend && st.agent.extend.can) ? [(st.agent.extend.out || {})[pid]
+            ? { icon: 'monitor', label: `Stop using ${p.name} as a display`, run: () => api.extend(pid, false) }
+            : { icon: 'monitor', label: `Use ${p.name} as a display for this Mac`, run: async () => { const r = await api.extend(pid, true); if (r && r.error) toast(r.error, true); } }] : []),
           { icon: 'send', label: 'Send files…', run: () => api.send_files(pid, false) },
           { icon: 'folder', label: 'Send a folder…', run: () => api.send_files(pid, true) },
           '-',
@@ -462,6 +483,7 @@
         break;
       }
       case 'stop-share': api.stop_sharing(); break;
+      case 'extend-stop': api.extend(pid, false); break;
       case 'listen': case 'mic': {
         const cur = st.agent.sound && st.agent.sound[b.dataset.act === 'listen' ? 'hear' : 'mic'][pid];
         const on = !(cur && cur.phase !== 'refused' && cur.phase !== 'failed');
