@@ -105,6 +105,12 @@ class Api(object):
     def set_side(self, pid, side):
         return self._call("set_side", pid, side)
 
+    def set_layout(self, pid, items):
+        return self._call("set_layout", pid, items)
+
+    def reset_layout(self, pid):
+        return self._call("reset_layout", pid)
+
     def forget(self, pid):
         return self._call("forget", pid)
 

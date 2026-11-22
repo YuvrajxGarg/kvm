@@ -120,7 +120,7 @@
       const placed = paired.filter((p) => p.side);
       $('#now-title').textContent = placed.length ? `${a.me.name}` : 'Place your other computer';
       $('#now-sub').textContent = placed.length
-        ? placed.map((p) => `${p.name} is to the ${SIDE_NAME[p.side]}${p.connected ? '' : ' (not connected)'}`).join(' · ')
+        ? placed.map((p) => `${p.name} is ${p.layout_set ? 'set up around this one' : 'to the ' + SIDE_NAME[p.side]}${p.connected ? '' : ' (not connected)'}`).join(' · ')
         : 'Drag it next to this one, where it sits on your desk.';
     }
     $('#home-btn').classList.toggle('hidden', a.mode === 'home');
@@ -221,35 +221,153 @@
     return `<div class="screen ${extra}">${monHTML}<b>${esc(p.name)}</b><span>${esc(OS_NAME[p.platform] || '')}${p.connected === false ? ' · offline' : ''}</span></div>`;
   }
 
+  // The desk: this computer's screens, and each screen of the others placed where it really
+  // sits, like Windows' display settings. Every screen of another computer drags on its own.
+  const SNAP = 12;  // px on the desk
+  let deskView = null;  // {scale, ox, oy, minx, miny, peers: {pid: items}}
+  let deskDrag = null;
+
+  function guessLayout(a, p) {
+    // Placed, but its screens aren't known yet (never connected): one 16:9 block on its side.
+    const mine = (a.me.screens && a.me.screens.length) ? a.me.screens : [[0, 0, 1440, 900]];
+    const L = Math.min(...mine.map((r) => r[0])), T = Math.min(...mine.map((r) => r[1]));
+    const R = Math.max(...mine.map((r) => r[0] + r[2])), B = Math.max(...mine.map((r) => r[1] + r[3]));
+    const w = 1920, h = 1080;
+    const at = { left: [L - w, (T + B - h) / 2], right: [R, (T + B - h) / 2], top: [(L + R - w) / 2, T - h], bottom: [(L + R - w) / 2, B] }[p.side];
+    return [{ r: [0, 0, w, h], at, guess: true }];
+  }
+
   function renderDesk(a, paired) {
-    const bySide = {};
-    paired.forEach((p) => { if (p.side) bySide[p.side] = p; });
+    const placed = paired.filter((p) => p.side);
     const unplaced = paired.filter((p) => !p.side);
-    let html = '';
-    for (const side of ['left', 'right', 'top', 'bottom']) {
-      const p = bySide[side];
-      html += `<div class="slot ${side} ${p ? 'filled' : ''}" data-side="${side}">${p
-        ? `<div class="screen-wrap" draggable="true" data-pid="${p.id}">${screenHTML(p, 'peer' + (p.connected ? '' : ' offline') + (a.active === p.id ? ' active' : ''))}</div>`
-        : (paired.length ? 'Drop here' : '')}</div>`;
-    }
-    html += `<div class="me">${screenHTML({ name: a.me.name, platform: a.me.platform, screens: a.me.screens }, a.mode === 'home' || a.mode === 'driven' ? (a.mode === 'driven' ? 'active' : '') : '')}</div>`;
-    const key = JSON.stringify([html, unplaced.map((p) => [p.id, p.name, p.connected])]);
     const desk = $('#desk');
-    if (desk.dataset.key !== key) {
-      desk.dataset.key = key;
-      desk.innerHTML = html;
-      desk.querySelectorAll('.screen-wrap').forEach((w) => { w.style.position = 'absolute'; w.style.inset = '0'; });
-    }
+    if (deskDrag) return;  // don't redraw under the pointer
+    const mine = (a.me.screens && a.me.screens.length) ? a.me.screens : [[0, 0, 1440, 900]];
+    const peers = {};
+    placed.forEach((p) => { peers[p.id] = (p.layout && p.layout.length) ? p.layout : guessLayout(a, p); });
+    const all = mine.map((r) => r.slice(0, 4));
+    Object.values(peers).forEach((items) => items.forEach((i) => all.push([i.at[0], i.at[1], i.r[2], i.r[3]])));
+    const minx = Math.min(...all.map((r) => r[0])), miny = Math.min(...all.map((r) => r[1]));
+    const maxx = Math.max(...all.map((r) => r[0] + r[2])), maxy = Math.max(...all.map((r) => r[1] + r[3]));
+    const W = desk.clientWidth || 640, H = desk.clientHeight || 300, pad = 28;
+    // Room around the arrangement so a screen can be dragged to any side.
+    const spanW = (maxx - minx) * 1.0, spanH = (maxy - miny) * 1.0;
+    const scale = Math.min((W - pad * 2) / Math.max(spanW, 1), (H - pad * 2) / Math.max(spanH, 1), 0.12);
+    const ox = (W - spanW * scale) / 2, oy = (H - spanH * scale) / 2;
+    deskView = { scale, ox, oy, minx, miny, peers, mine };
+    const box = (r) => `left:${Math.round(ox + (r[0] - minx) * scale)}px;top:${Math.round(oy + (r[1] - miny) * scale)}px;width:${Math.max(8, Math.round(r[2] * scale))}px;height:${Math.max(8, Math.round(r[3] * scale))}px`;
+    let html = mine.map((r, i) => `<div class="scr me-scr ${a.mode !== 'driving' ? 'active' : ''}" style="${box(r)}">${i === 0
+      ? `<span class="os">${icon(OS_ICON[a.me.platform] || 'monitor')}</span><b>${esc(a.me.name)}</b>` : ''}</div>`).join('');
+    placed.forEach((p) => {
+      peers[p.id].forEach((it, i) => {
+        const cls = 'scr peer-scr' + (p.connected ? '' : ' offline') + (a.active === p.id ? ' active' : '');
+        html += `<div class="${cls}" data-pid="${p.id}" data-i="${i}" ${it.guess ? 'data-guess="1"' : ''} style="${box([it.at[0], it.at[1], it.r[2], it.r[3]])}" title="Drag to where this screen really is">
+          ${i === 0 ? `<span class="os">${icon(OS_ICON[p.platform] || 'monitor')}</span>` : ''}<b>${esc(p.name)}</b><span class="dim">${Math.round(it.r[2])}×${Math.round(it.r[3])}</span></div>`;
+      });
+    });
+    if (!placed.length && paired.length) html += `<div class="desk-empty">Drop a computer next to this one</div>`;
+    const key = JSON.stringify([html, W, H]);
+    if (desk.dataset.key !== key) { desk.dataset.key = key; desk.innerHTML = html; }
     const hint = $('#desk-hint');
-    const trayKey = JSON.stringify(unplaced.map((p) => [p.id, p.name, p.connected, p.platform]));
+    const trayKey = JSON.stringify([unplaced.map((p) => [p.id, p.name, p.connected, p.platform]), placed.map((p) => [p.id, !!p.layout_set])]);
     if (hint.dataset.key !== trayKey) {
       hint.dataset.key = trayKey;
       hint.innerHTML = unplaced.length
-        ? `<div>Drag a computer to the side of this one where it really is.</div><div class="tray">${unplaced.map((p) =>
+        ? `<div>Drag a computer onto the desk, next to this one where it really is.</div><div class="tray">${unplaced.map((p) =>
             `<div class="chip screen-wrap" draggable="true" data-pid="${p.id}">${screenHTML(p, 'peer' + (p.connected ? '' : ' offline'))}</div>`).join('')}</div>`
-        : (paired.length ? 'Drag a computer to move it. Push the pointer past that edge to go there.' : '');
+        : (paired.length ? `Drag each screen to where it sits on your desk. The pointer crosses only where the edges touch. ${placed.some((p) => p.layout_set)
+          ? '<a href="#" data-act="desk-reset">Reset</a>' : ''}` : '');
     }
   }
+
+  // Dragging one screen of another computer around the desk.
+  function deskRects(except) {
+    const v = deskView, out = v.mine.map((r) => ({ r: r.slice(0, 4), mine: true }));
+    for (const [pid, items] of Object.entries(v.peers)) {
+      items.forEach((it, i) => { if (!(except && except.pid === pid && except.i === i)) out.push({ r: [it.at[0], it.at[1], it.r[2], it.r[3]], pid }); });
+    }
+    return out;
+  }
+  const overlap = (a, b) => a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3];
+  function snapRect(r, others, thr) {
+    let best = [thr + 1, 0], bestY = [thr + 1, 0];
+    for (const o of others) {
+      const q = o.r;
+      for (const d of [q[0] + q[2] - r[0], q[0] - (r[0] + r[2]), q[0] - r[0], q[0] + q[2] - (r[0] + r[2])]) if (Math.abs(d) < best[0]) best = [Math.abs(d), d];
+      for (const d of [q[1] + q[3] - r[1], q[1] - (r[1] + r[3]), q[1] - r[1], q[1] + q[3] - (r[1] + r[3])]) if (Math.abs(d) < bestY[0]) bestY = [Math.abs(d), d];
+    }
+    r = r.slice();
+    if (best[0] <= thr) r[0] += best[1];
+    if (bestY[0] <= thr) r[1] += bestY[1];
+    // Never on top of another screen: push out the shortest way.
+    for (let n = 0; n < 4; n++) {
+      const o = others.find((x) => overlap(r, x.r));
+      if (!o) break;
+      const q = o.r;
+      const moves = [[q[0] + q[2] - r[0], 0], [q[0] - (r[0] + r[2]), 0], [0, q[1] + q[3] - r[1]], [0, q[1] - (r[1] + r[3])]];
+      moves.sort((m1, m2) => Math.abs(m1[0] + m1[1]) - Math.abs(m2[0] + m2[1]));
+      r[0] += moves[0][0]; r[1] += moves[0][1];
+    }
+    // And touching something, so the pointer can get there.
+    const gap = (q) => Math.max(q[0] - (r[0] + r[2]), r[0] - (q[0] + q[2]), 0) + Math.max(q[1] - (r[1] + r[3]), r[1] - (q[1] + q[3]), 0);
+    if (others.length && !others.some((o) => gap(o.r) === 0)) {
+      const o = others.reduce((m, x) => (gap(x.r) < gap(m.r) ? x : m));
+      const q = o.r;
+      const dx = q[0] - (r[0] + r[2]) > 0 ? q[0] - (r[0] + r[2]) : (r[0] - (q[0] + q[2]) > 0 ? q[0] + q[2] - r[0] : 0);
+      const dy = q[1] - (r[1] + r[3]) > 0 ? q[1] - (r[1] + r[3]) : (r[1] - (q[1] + q[3]) > 0 ? q[1] + q[3] - r[1] : 0);
+      if (Math.abs(dx) && Math.abs(dy)) { if (Math.abs(dx) < Math.abs(dy)) { r[0] += dx; r[1] += dy; } else { r[0] += dx; r[1] += dy; } }
+      else { r[0] += dx; r[1] += dy; }
+      // A corner-only touch can't be crossed: slide along to share an edge.
+      if (!(r[0] < q[0] + q[2] && q[0] < r[0] + r[2]) && !(r[1] < q[1] + q[3] && q[1] < r[1] + r[3])) {
+        if (Math.abs(dx)) r[1] = Math.min(Math.max(r[1], q[1] - r[3] + 40), q[1] + q[3] - 40);
+        else r[0] = Math.min(Math.max(r[0], q[0] - r[2] + 40), q[0] + q[2] - 40);
+      }
+    }
+    return r;
+  }
+
+  $('#desk').addEventListener('pointerdown', (e) => {
+    const el = e.target.closest('.peer-scr');
+    if (!el || !deskView || e.button !== 0) return;
+    e.preventDefault();
+    el.setPointerCapture(e.pointerId);
+    deskDrag = { el, pid: el.dataset.pid, i: +el.dataset.i, x0: e.clientX, y0: e.clientY,
+      l0: parseFloat(el.style.left), t0: parseFloat(el.style.top), moved: false };
+    el.classList.add('dragging');
+  });
+  $('#desk').addEventListener('pointermove', (e) => {
+    const d = deskDrag;
+    if (!d) return;
+    const dx = e.clientX - d.x0, dy = e.clientY - d.y0;
+    if (Math.abs(dx) + Math.abs(dy) > 3) d.moved = true;
+    const v = deskView, it = v.peers[d.pid][d.i];
+    let r = [v.minx + (d.l0 + dx - v.ox) / v.scale, v.miny + (d.t0 + dy - v.oy) / v.scale, it.r[2], it.r[3]];
+    r = snapRect(r, deskRects(d), SNAP / v.scale);
+    d.r = r;
+    d.el.style.left = Math.round(v.ox + (r[0] - v.minx) * v.scale) + 'px';
+    d.el.style.top = Math.round(v.oy + (r[1] - v.miny) * v.scale) + 'px';
+  });
+  const endDeskDrag = async () => {
+    const d = deskDrag;
+    if (!d) return;
+    deskDrag = null;
+    d.el.classList.remove('dragging');
+    if (!d.moved || !d.r) return;
+    const items = deskView.peers[d.pid].filter((it) => !it.guess).map((it, i) => ({ r: it.r, at: i === d.i ? [Math.round(d.r[0]), Math.round(d.r[1])] : it.at }));
+    if (items.length) await api.set_layout(d.pid, items);
+    else {  // screens not known yet: still lets them pick the side
+      const v = deskView, mine = v.mine;
+      const cx = d.r[0] + d.r[2] / 2, cy = d.r[1] + d.r[3] / 2;
+      const L = Math.min(...mine.map((r) => r[0])), T = Math.min(...mine.map((r) => r[1]));
+      const R = Math.max(...mine.map((r) => r[0] + r[2])), B = Math.max(...mine.map((r) => r[1] + r[3]));
+      const fx = (cx - (L + R) / 2) / (R - L), fy = (cy - (T + B) / 2) / (B - T);
+      await api.set_side(d.pid, Math.abs(fx) >= Math.abs(fy) ? (fx > 0 ? 'right' : 'left') : (fy > 0 ? 'bottom' : 'top'));
+    }
+    $('#desk').dataset.key = '';
+    poll();
+  };
+  $('#desk').addEventListener('pointerup', endDeskDrag);
+  $('#desk').addEventListener('pointercancel', endDeskDrag);
 
   function renderPeers(a, peers) {
     const el = $('#peers');
@@ -567,6 +685,12 @@
         ]);
         break;
       }
+      case 'desk-reset':
+        e.preventDefault();
+        for (const p of (st.agent.peers || []).filter((x) => x.layout_set)) await api.reset_layout(p.id);
+        $('#desk').dataset.key = '';
+        poll();
+        break;
       case 'stop-share': api.stop_sharing(); break;
       case 'extend-stop': api.extend(pid, false); break;
       case 'stop-camera': api.stop_camera(); break;
@@ -609,19 +733,19 @@
     const w = e.target.closest && e.target.closest('.screen-wrap');
     if (w) { dragPid = w.dataset.pid; e.dataTransfer.setData('text/plain', 'kvm:' + dragPid); e.dataTransfer.effectAllowed = 'move'; }
   });
-  document.addEventListener('dragend', () => { dragPid = null; document.querySelectorAll('.slot.over').forEach((s) => s.classList.remove('over')); });
+  document.addEventListener('dragend', () => { dragPid = null; $('#desk').classList.remove('over'); });
   document.addEventListener('dragover', (e) => {
     const files = !dragPid && e.dataTransfer && [...(e.dataTransfer.types || [])].includes('Files');
     if (dragPid) {
-      const slot = e.target.closest && e.target.closest('.slot');
-      document.querySelectorAll('.slot.over').forEach((s) => s !== slot && s.classList.remove('over'));
-      if (slot) { e.preventDefault(); slot.classList.add('over'); }
+      const over = e.target.closest && e.target.closest('#desk');
+      $('#desk').classList.toggle('over', !!over);
+      if (over) e.preventDefault();
       return;
     }
     if (files) {
       e.preventDefault();
       $('#drop-veil').classList.remove('hidden');
-      const row = e.target.closest && (e.target.closest('.peer-row[data-pid]') || e.target.closest('.screen-wrap[data-pid]'));
+      const row = e.target.closest && (e.target.closest('.peer-row[data-pid]') || e.target.closest('.screen-wrap[data-pid]') || e.target.closest('.peer-scr[data-pid]'));
       document.querySelectorAll('.peer-row.drop').forEach((r) => r !== row && r.classList.remove('drop'));
       if (row) { row.classList.add('drop'); dropTarget = row.dataset.pid; } else dropTarget = null;
     }
@@ -632,12 +756,22 @@
     $('#drop-veil').classList.add('hidden');
     document.querySelectorAll('.peer-row.drop').forEach((r) => r.classList.remove('drop'));
     if (dragPid) {
-      const slot = e.target.closest && e.target.closest('.slot');
-      if (slot) api.set_side(dragPid, slot.dataset.side);
+      $('#desk').classList.remove('over');
+      if (e.target.closest && e.target.closest('#desk')) api.set_side(dragPid, deskSide(e));
       dragPid = null;
       setTimeout(poll, 50);
     }
   });
+
+  // Which side of this computer's screens a drop on the desk landed.
+  function deskSide(e) {
+    const mes = [...document.querySelectorAll('#desk .me-scr')].map((el) => el.getBoundingClientRect());
+    if (!mes.length) return 'right';
+    const L = Math.min(...mes.map((r) => r.left)), R = Math.max(...mes.map((r) => r.right));
+    const T = Math.min(...mes.map((r) => r.top)), B = Math.max(...mes.map((r) => r.bottom));
+    const fx = (e.clientX - (L + R) / 2) / Math.max(R - L, 1), fy = (e.clientY - (T + B) / 2) / Math.max(B - T, 1);
+    return Math.abs(fx) >= Math.abs(fy) ? (fx > 0 ? 'right' : 'left') : (fy > 0 ? 'bottom' : 'top');
+  }
 
   function onDropped(paths) {
     const peers = ((st && st.agent && st.agent.peers) || []).filter((p) => p.paired && p.connected);
@@ -686,7 +820,8 @@
   function demoApi() {
     const scene = (new URLSearchParams(location.search)).get('scene') || 'home';
     const me = { id: 'me', name: 'Yuvraj’s MacBook Air', platform: 'mac', version: '1.0.0', screens: [[0, 0, 1470, 956]], port: 47610, addresses: ['192.168.1.14'] };
-    const pc = { id: 'pc', name: 'Yuvraj-PC', platform: 'windows', paired: true, connected: true, online: true, side: 'right', screens: [[0, 0, 1920, 1080], [1920, 0, 2560, 1440]] };
+    const pc = { id: 'pc', name: 'Yuvraj-PC', platform: 'windows', paired: true, connected: true, online: true, side: 'right', screens: [[0, 0, 1920, 1080], [1920, 0, 2560, 1440]], layout_set: true,
+      layout: [{ r: [0, 0, 1920, 1080], at: [-225, -1080] }, { r: [1920, 0, 2560, 1440], at: [1470, 150] }] };
     const state = {
       mode: 'app', error: null,
       agent: {
@@ -711,6 +846,7 @@
       login_state: async () => ({ supported: true, on: true }),
       pair_phone: async () => (state.agent.qr = true) && ({ svg: '<svg viewBox="0 0 10 10"><rect width="10" height="10" fill="#fff"/><rect x="1" y="1" width="3" height="3"/><rect x="6" y="1" width="3" height="3"/><rect x="1" y="6" width="3" height="3"/></svg>' }),
       set_side: async (pid, side) => { const p = state.agent.peers.find((x) => x.id === pid); if (p) p.side = side; },
+      set_layout: async (pid, items) => { const p = state.agent.peers.find((x) => x.id === pid); if (p) { p.layout = items; p.layout_set = true; } return true; },
     }, { get: (t, k) => t[k] || noop });
   }
 })();

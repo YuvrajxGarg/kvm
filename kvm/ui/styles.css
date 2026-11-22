@@ -211,14 +211,23 @@ body.mac .top .mark { margin-left: 64px; }
   background: radial-gradient(circle at 50% 50%, rgba(204,255,77,.05), transparent 300px),
               repeating-linear-gradient(0deg, rgba(255,255,255,.025) 0 1px, transparent 1px 22px),
               repeating-linear-gradient(90deg, rgba(255,255,255,.025) 0 1px, transparent 1px 22px); }
-.slot { position: absolute; display: flex; align-items: center; justify-content: center; border-radius: 12px;
-  border: 1.5px dashed rgba(255,255,255,.1); color: var(--text3); font-size: 11.5px; font-weight: 500; transition: border-color .15s, background .15s; }
-.slot.over { border-color: var(--accent); background: rgba(204,255,77,.06); color: var(--accent); }
-.slot.filled { border: 0; }
-.slot.left { left: 4%; top: 50%; width: 24%; height: 44%; transform: translateY(-50%); }
-.slot.right { right: 4%; top: 50%; width: 24%; height: 44%; transform: translateY(-50%); }
-.slot.top { left: 50%; top: 3%; width: 24%; height: 21%; transform: translateX(-50%); }
-.slot.bottom { left: 50%; bottom: 3%; width: 24%; height: 21%; transform: translateX(-50%); }
+.desk.over { outline: 1.5px dashed var(--accent); outline-offset: -6px; }
+.desk-empty { position: absolute; right: 6%; top: 50%; transform: translateY(-50%); color: var(--text3); font-size: 11.5px;
+  border: 1.5px dashed rgba(255,255,255,.1); border-radius: 12px; padding: 26px 18px; }
+.scr { position: absolute; box-sizing: border-box; border-radius: 6px; background: linear-gradient(#26262a, #19191c);
+  border: 1px solid var(--stroke-strong); color: var(--text); display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 2px; overflow: hidden; text-align: center; padding: 4px; user-select: none;
+  box-shadow: 0 8px 22px rgba(0,0,0,.3); transition: border-color .2s, box-shadow .2s; }
+.scr b { font-weight: 600; font-size: 12px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scr .os { width: 18px; height: 18px; color: var(--text2); }
+.scr .os svg.i { width: 18px; height: 18px; }
+.scr .dim { color: var(--text3); font-size: 10px; }
+.me-scr { border-color: rgba(255,255,255,.25); }
+.peer-scr { cursor: grab; touch-action: none; }
+.peer-scr.offline { opacity: .45; }
+.peer-scr.dragging { cursor: grabbing; z-index: 2; border-color: var(--accent); transition: none; }
+.scr.active { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(204,255,77,.15), 0 8px 22px rgba(0,0,0,.3); }
+.desk-hint a { color: var(--accent); text-decoration: none; margin-left: 4px; }
 .screen { position: absolute; inset: 0; color: var(--text); border-radius: 12px; background: linear-gradient(#26262a, #19191c); border: 1px solid var(--stroke-strong);
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 8px; text-align: center;
   box-shadow: 0 10px 30px rgba(0,0,0,.35); transition: border-color .2s, box-shadow .2s; }

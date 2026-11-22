@@ -6,11 +6,12 @@ this one. The agent drives it with commands (dicts with a "c" key) and hears bac
 which is why everything here is plain data.
 
 Events a backend sends:
-  {"t": "cross", "side", "frac"}            the pointer pushed past an edge with a computer on it
+  {"t": "cross", "side", "frac", "x", "y"}  the pointer pushed past an edge with a computer on it
   {"t": "move", "dx", "dy"} / "button" / "wheel" / "key"   captured input while grabbed
   {"t": "home_hotkey"}                      the return hotkey was pressed while grabbed
   {"t": "lock", "on"}                       cursor lock toggled
-  {"t": "exit", "side", "frac"}             (being driven) the pointer pushed past the edge home
+  {"t": "exit", "side", "frac", "pt"}       (being driven) the pointer pushed past the edge home;
+                                            pt is where it lands there, when the driver sent a layout
   {"t": "clip", "kind": "text"|"png", "data"}   this computer's clipboard changed
   {"t": "screens", "rects"}                 the monitor layout changed
   {"t": "frame", "jpeg", "w", "h", "seq", "cursor"}   (sharing the screen) a new picture of it
@@ -28,7 +29,13 @@ import threading
 import time
 
 from .. import keys
-from ..screens import Screens
+from ..screens import Screens, beyond, landing
+
+# Going home from the other computer needs a deliberate push: a mouse settles with a pixel or
+# two of drift, and right after crossing that drift used to send the pointer straight back.
+EXIT_GRACE = 0.25   # seconds after entering when the edge home is closed
+EXIT_PUSH = 8.0     # how far past the edge the pointer has to be pushed
+GAP = 48.0          # screens this close count as touching
 
 BUTTONS = (1, 2, 3, 4, 5)
 CLIP_TEXT_MAX = 4 << 20
@@ -54,6 +61,11 @@ class Backend(object):
         self.grabbed = False
         self.locked = False
         self.exits = []
+        self.targets = []            # other computers' screens placed around ours (our coordinates)
+        self.map = []                # being driven: our screens in the driver's space ({"r", "at"})
+        self.home = []               # being driven: the driver's screens
+        self.entered = 0.0
+        self.push = 0.0
         self.held_local = set()      # keys physically down here (for hold-to-cross, hotkeys)
         self.buttons_local = set()
         self.held_inj = set()        # keys we injected and haven't released
@@ -117,6 +129,7 @@ class Backend(object):
         c = cmd.get("c")
         if c == "config":
             self.watch_sides = [s for s in cmd.get("sides", []) if s in ("left", "right", "top", "bottom")]
+            self.targets = [list(map(float, r[:4])) for r in cmd.get("targets") or []]
             self.cross_mod = cmd.get("cross_mod") or ""
             self.return_combo = keys.parse_combo(cmd.get("return_hotkey") or "ctrl+alt+esc")
             self.lock_key = keys.BY_NAME.get(cmd.get("lock_key") or "scrolllock")
@@ -125,10 +138,19 @@ class Backend(object):
         elif c == "grab":
             self.grab(bool(cmd.get("on")))
         elif c == "place":
-            self.place(cmd["side"], cmd.get("frac", 0.5))
+            if cmd.get("pt"):
+                self.place_at(cmd["pt"][0], cmd["pt"][1])
+            else:
+                self.place(cmd["side"], cmd.get("frac", 0.5))
         elif c == "driven":
             self.exits = list(cmd.get("exits") or [])
-            if cmd.get("side"):
+            self.map = list(cmd.get("map") or [])
+            self.home = [list(map(float, r[:4])) for r in cmd.get("home") or []]
+            self.entered = time.time()
+            self.push = 0.0
+            if cmd.get("pt"):
+                self.place_at(cmd["pt"][0], cmd["pt"][1])
+            elif cmd.get("side"):
                 self.place(cmd["side"], cmd.get("frac", 0.5))
         elif c == "lock":
             self.locked = bool(cmd.get("on"))
@@ -175,13 +197,14 @@ class Backend(object):
     # ---- driving: what the platform capture calls -----------------------------
     def on_local_move(self, x, y, dx, dy):
         """Pointer moved here while not grabbed. Returns True to swallow the event."""
-        if self.grabbed or not self.watch_sides or self.locked or self.buttons_local:
+        if self.grabbed or not (self.watch_sides or self.targets) or self.locked or self.buttons_local:
             self.edge_hits = {}
             return False
         if self.cross_mod and not (self.held_local & _mod_set(self.cross_mod)):
             return False
-        for side in self.watch_sides:
-            if self.screens.on_edge(x, y, side):
+        for side in (("left", "right", "top", "bottom") if self.targets else self.watch_sides):
+            # With a layout, only the stretch of edge that another screen really touches crosses.
+            if self.screens.on_edge(x, y, side) and (not self.targets or self.target(x, y, side)):
                 pushing = (side == "right" and dx > 0) or (side == "left" and dx < 0) or \
                           (side == "bottom" and dy > 0) or (side == "top" and dy < 0)
                 self.edge_hits[side] = self.edge_hits.get(side, 0) + 1
@@ -242,6 +265,23 @@ class Backend(object):
             self.buttons_local = set()
             self._set_grab(on)
 
+    def target(self, x, y, side):
+        """The placed screen of another computer just past our `side` edge at (x, y), or None."""
+        r = self.screens.at(x, y) or self.screens.nearest(x, y)
+        ex = {"right": r[0] + r[2], "left": r[0], "bottom": r[1] + r[3], "top": r[1]}[side]
+        t = beyond(self.targets, x, y, side, tol=GAP)
+        if t is None:
+            return None
+        gap = {"right": t[0] - ex, "left": ex - (t[0] + t[2]), "bottom": t[1] - ex, "top": ex - (t[1] + t[3])}[side]
+        return t if gap <= GAP else None
+
+    def place_at(self, x, y):
+        """Put this computer's pointer at (x, y), kept on a screen."""
+        self.screens = Screens(self._screens() or self.screens.public())
+        x, y = self.screens.clamp(float(x), float(y))
+        self.pos = (x, y)
+        self._warp(x, y)
+
     def place(self, side, frac):
         """Put this computer's pointer on its `side` edge at `frac`, just inside."""
         self.screens = Screens(self._screens() or self.screens.public())
@@ -254,14 +294,65 @@ class Backend(object):
         cur = self._cursor()
         if cur is None:
             cur = self.pos or (self.screens.left + 10, self.screens.top + 10)
-        nx, ny, exit_side, frac = self.screens.step(cur[0], cur[1], dx, dy, () if self.locked else self.exits)
+        pt = None
+        if self.home and not self.locked:
+            nx, ny, _, _ = self.screens.step(cur[0], cur[1], dx, dy, ())
+            out = None if self.screens.at(cur[0] + dx, cur[1] + dy) else self._way_home(cur, dx, dy)
+            exit_side, frac = (out[0], 0.5) if out else (None, 0.0)
+            if out:
+                pt, over = out[1], out[2]
+        else:
+            nx, ny, exit_side, frac = self.screens.step(cur[0], cur[1], dx, dy, () if self.locked else self.exits)
+            if exit_side:
+                comp = {"right": dx, "left": -dx, "bottom": dy, "top": -dy}[exit_side]
+                over = max(comp - max(0.0, _room(self.screens, cur, exit_side)), 0.0)
+                nx, ny = self.screens.clamp(nx, ny)
         if exit_side:
-            self.release()
-            self.exits = []
-            self.sink({"t": "exit", "side": exit_side, "frac": frac})
-            return
+            if time.time() - self.entered >= EXIT_GRACE:
+                self.push += over
+            if self.push >= EXIT_PUSH:
+                self.release()
+                self.exits, self.map, self.home, self.push = [], [], [], 0.0
+                ev = {"t": "exit", "side": exit_side, "frac": frac}
+                if pt:
+                    ev["pt"] = pt
+                self.sink(ev)
+                return
+        else:
+            self.push = 0.0
         self.pos = (nx, ny)
         self._post_move(nx, ny, set(self.buttons_inj))
+
+    def _way_home(self, cur, dx, dy):
+        """Being driven with a layout: does this move leave our screens onto one of the driver's?
+        Returns (side, point there, how far past the edge) or None."""
+        r = self.screens.at(cur[0], cur[1]) or self.screens.nearest(cur[0], cur[1])
+        item = None
+        for it in self.map:
+            q = it.get("r") or []
+            if len(q) >= 4 and all(abs(float(q[i]) - r[i]) < 1.5 for i in range(4)):
+                item = it
+                break
+        if item is None:
+            return None
+        nx, ny = cur[0] + dx, cur[1] + dy
+        cx, cy = min(max(nx, r[0]), r[0] + r[2] - 1), min(max(ny, r[1]), r[1] + r[3] - 1)
+        ox, oy = item["at"][0] - r[0], item["at"][1] - r[1]   # ours -> driver's space
+        for side, over in (("right", nx - (r[0] + r[2] - 1)), ("left", r[0] - nx),
+                           ("bottom", ny - (r[1] + r[3] - 1)), ("top", r[1] - ny)):
+            if over <= 0:
+                continue
+            px, py = cx + ox, cy + oy
+            h = beyond(self.home, px, py, side, tol=GAP)
+            if h is None:
+                continue
+            edge = {"right": px + 1, "left": px, "bottom": py + 1, "top": py}[side]
+            gap = {"right": h[0] - edge, "left": edge - (h[0] + h[2]), "bottom": h[1] - edge, "top": edge - (h[1] + h[3])}[side]
+            if gap > GAP:
+                continue
+            lx, ly = landing(h, px, py, side)
+            return side, [lx, ly], over
+        return None
 
     def inject_button(self, b, down):
         if b not in BUTTONS:
@@ -479,6 +570,13 @@ class Backend(object):
 
     def _clip_put(self, kind, data):
         pass
+
+
+def _room(screens, cur, side):
+    """How far the pointer is from our `side` edge of the screen it's on."""
+    r = screens.at(cur[0], cur[1]) or screens.nearest(cur[0], cur[1])
+    return {"right": r[0] + r[2] - 1 - cur[0], "left": cur[0] - r[0],
+            "bottom": r[1] + r[3] - 1 - cur[1], "top": cur[1] - r[1]}[side]
 
 
 def draw_pointer(img, x, y):

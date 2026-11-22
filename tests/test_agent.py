@@ -58,6 +58,67 @@ class TwoComputers(unittest.TestCase):
         self.assertTrue(wait(lambda: self.pc.status()["mode"] == "driven"))
         self.assertEqual(self.mac.status()["mode"], "driving")
 
+    def test_mouse_drift_after_crossing_stays_put(self):
+        # A mouse settling after the push (a pixel or two back toward the Mac) must not send
+        # the pointer home: typing then lands on the Mac, the MX Master bug.
+        self.cross()
+        for _ in range(6):
+            self.mac_be.on_grabbed_move(-1, 0)
+        time.sleep(0.35)
+        for _ in range(5):
+            self.mac_be.on_grabbed_move(-1, 0)
+        self.mac_be.on_grabbed_move(3, 0)   # moved away: the push starts over
+        for _ in range(5):
+            self.mac_be.on_grabbed_move(-1, 0)
+        time.sleep(0.3)
+        self.assertEqual(self.pc.status()["mode"], "driven")
+        self.assertEqual(self.mac.status()["mode"], "driving")
+        self.mac_be.on_grabbed_move(-30, 0)  # a real push goes home
+        self.assertTrue(wait(lambda: self.mac.status()["mode"] == "home"))
+
+    def test_arrangement_edges(self):
+        # His desk: the PC's monitor sits above the Mac, the PC's laptop to the right and lower.
+        layout = [{"r": [0, 0, 1920, 1080], "at": [-240, -1080]},
+                  {"r": [1920, 0, 2560, 1440], "at": [1440, 100]}]
+        self.assertTrue(self.mac.set_layout(self.pc_id, layout))
+        st = [p for p in self.mac.status()["peers"] if p["id"] == self.pc_id][0]
+        self.assertEqual([i["at"] for i in st["layout"]], [[-240, -1080], [1440, 100]])
+        self.assertTrue(wait(lambda: len(self.mac_be.targets) == 2))
+        # The PC learns where the Mac sits on its side.
+        self.assertTrue(wait(lambda: (self.pc._store.pair(self.mac_id) or {}).get("layout")))
+        back = self.pc._store.pair(self.mac_id)["layout"]
+        self.assertEqual(back[0]["r"], [0.0, 0.0, 1440.0, 900.0])
+        self.assertEqual(back[0]["at"], [240, 1080])  # just under the monitor
+        # Right edge above the laptop's top: nothing there, no crossing.
+        self.assertFalse(self.mac_be.on_local_move(1439, 50, 5, 0))
+        # Right edge beside the laptop: lands on the laptop at the same height.
+        self.assertTrue(self.mac_be.on_local_move(1439, 450, 5, 0))
+        self.assertTrue(wait(lambda: self.pc.status()["mode"] == "driven"))
+        self.assertTrue(wait(lambda: any(p[0] == "warp" for p in self.pc_be.posted)))
+        self.assertEqual([p for p in self.pc_be.posted if p[0] == "warp"][-1], ("warp", 1922.0, 350.0))
+        self.mac.go_home()
+        self.assertTrue(wait(lambda: self.pc.status()["mode"] == "home"))
+        # Top edge, anywhere along it: lands on the bottom of the monitor, straight above.
+        self.mac_be.cursor = (700, 0)
+        self.assertTrue(self.mac_be.on_local_move(700, 0, 0, -5))
+        self.assertTrue(wait(lambda: self.pc.status()["mode"] == "driven"))
+        self.assertTrue(wait(lambda: [p for p in self.pc_be.posted if p[0] == "warp"][-1] == ("warp", 940.0, 1077.0)))
+        # Coming down the monitor's bottom edge where the Mac isn't under it: stays on the PC.
+        time.sleep(0.3)
+        self.mac_be.on_grabbed_move(-900, 0)
+        self.mac_be.on_grabbed_move(0, 60)
+        time.sleep(0.3)
+        self.assertEqual(self.pc.status()["mode"], "driven")
+        # Above the Mac: comes home straight below.
+        self.mac_be.on_grabbed_move(800, 0)
+        self.mac_be.on_grabbed_move(0, 60)
+        self.assertTrue(wait(lambda: self.mac.status()["mode"] == "home"))
+        self.assertTrue(wait(lambda: self.mac_be.cursor == (600.0, 2.0)), self.mac_be.cursor)
+        # Reset puts the whole arrangement back, centred on its side.
+        self.mac.reset_layout(self.pc_id)
+        st = [p for p in self.mac.status()["peers"] if p["id"] == self.pc_id][0]
+        self.assertNotEqual([i["at"] for i in st["layout"]], [[-240, -1080], [1440, 100]])
+
     def test_wrong_code_is_refused(self):
         other = Agent(FakeBackend(), Store(os.path.join(self.tmp, "x")), port=0, discover=False).start()
         try:
@@ -91,6 +152,7 @@ class TwoComputers(unittest.TestCase):
         # Moves arrive; pushing back past the PC's left edge brings the pointer home.
         self.mac_be.on_grabbed_move(40, 0)
         self.assertTrue(wait(lambda: any(p[0] == "move" for p in self.pc_be.posted)))
+        time.sleep(0.3)  # the edge home stays shut for a moment after crossing
         self.mac_be.on_grabbed_move(-400, 0)
         self.assertTrue(wait(lambda: self.mac.status()["mode"] == "home"))
         self.assertEqual(self.pc.status()["mode"], "home")
