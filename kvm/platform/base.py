@@ -69,6 +69,7 @@ class Backend(object):
         self.locked = False
         self.exits = []
         self.share_out = True        # this keyboard and mouse may go to other computers
+        self.trackpad_stays = False  # only a mouse crosses; the built-in trackpad stays on this computer
         self.edge_resistance = 0.0   # how far to push past the edge before crossing
         self.edge_push = 0.0
         self.reverse_scroll = False  # flip scrolling that comes from another computer
@@ -149,6 +150,7 @@ class Backend(object):
             self.watch_sides = [s for s in cmd.get("sides", []) if s in ("left", "right", "top", "bottom")]
             self.targets = [list(map(float, r[:4])) for r in cmd.get("targets") or []]
             self.share_out = bool(cmd.get("share_out", True))
+            self.trackpad_stays = bool(cmd.get("trackpad_stays", False))
             self.edge_resistance = max(0.0, float(cmd.get("edge_resistance") or 0))
             self.reverse_scroll = bool(cmd.get("reverse_scroll"))
             self.toggle_key = keys.BY_NAME.get(cmd.get("toggle_key") or "")
@@ -228,7 +230,8 @@ class Backend(object):
     def on_local_move(self, x, y, dx, dy):
         """Pointer moved here while not grabbed. Returns True to swallow the event."""
         if self.grabbed or not (self.watch_sides or self.targets) or self.locked or self.buttons_local \
-                or not self.share_out or time.time() < self.quiet_until:
+                or not self.share_out or time.time() < self.quiet_until \
+                or (self.trackpad_stays and self._from_trackpad()):
             self.edge_hits = {}
             self.edge_push = 0.0
             return False
@@ -457,6 +460,10 @@ class Backend(object):
         # Off every screen on the desk: stop at the edge of the one the pointer is on.
         r = self.screens.at(cur[0], cur[1]) or self.screens.nearest(cur[0], cur[1])
         return min(max(cur[0] + dx, r[0]), r[0] + r[2] - 1), min(max(cur[1] + dy, r[1]), r[1] + r[3] - 1)
+
+    def _from_trackpad(self):
+        """Did the latest pointer move come from a trackpad? (Platforms that can tell override this.)"""
+        return False
 
     def _way_home(self, cur, dx, dy):
         """Being driven with a layout: does this move leave our screens onto one of the driver's?

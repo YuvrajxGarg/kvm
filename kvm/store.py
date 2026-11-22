@@ -34,6 +34,7 @@ DEFAULTS = {
     "camera_share": True,         # paired computers may use this computer's camera
     "phone_notifs": True,         # show a paired phone's notifications on this computer
     "share_out": True,            # this keyboard and mouse may go to other computers
+    "trackpad_stays": False,      # only a mouse crosses; the trackpad stays on this computer (Mac)
     "accept_in": True,            # other computers' keyboard and mouse may come here
     "toggle_key": "rshift",       # double-tap to turn sharing on and off ("" for none)
     "edge_resistance": 0,         # px to push past the edge before crossing
@@ -49,7 +50,7 @@ SETTING_TYPES = {"clipboard": bool, "clipboard_images": bool, "swap_cmd_ctrl": b
                  "return_hotkey": str, "lock_key": str, "speed": float, "receive_dir": str, "files": bool,
                  "remote_actions": bool, "screen_share": bool, "screen_control": bool,
                  "sound_share": bool, "mic_accept": bool, "display_accept": bool, "camera_share": bool,
-                 "phone_notifs": bool, "share_out": bool, "accept_in": bool, "toggle_key": str,
+                 "phone_notifs": bool, "share_out": bool, "trackpad_stays": bool, "accept_in": bool, "toggle_key": str,
                  "edge_resistance": int, "reverse_scroll": bool, "shake_home": bool, "clip_mode": str,
                  "clipboard_secrets": bool, "clip_max_kb": int, "clip_recent": int, "file_keys": bool}
 

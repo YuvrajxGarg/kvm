@@ -62,3 +62,15 @@ class DeskLayoutTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TrackpadStaysTest(unittest.TestCase):
+    def test_only_a_mouse_crosses(self):
+        be = FakeBackend(rects=[(0, 0, 1470, 956)])
+        be.start(lambda e: None)
+        be.handle({"c": "config", "trackpad_stays": True})
+        be.targets = [[-500.0, -1440.0, 2560.0, 1440.0]]   # a monitor above
+        be._from_trackpad = lambda: True
+        self.assertFalse(be.on_local_move(700, 0, 0, -5))
+        be._from_trackpad = lambda: False
+        self.assertTrue(be.on_local_move(700, 0, 0, -5))

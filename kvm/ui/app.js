@@ -614,6 +614,9 @@
       return dirCards(
         row(`Use this ${meName()}’s mouse and keyboard on ${esc(other)}`, 'Push the pointer past the edge.', swc('share_out', s.share_out)),
         row(`Let ${esc(other)} use this ${meName()}`, 'Its pointer can come onto this screen.', swc('accept_in', s.accept_in)))
+        + (mac ? group('Trackpad', [
+          row('Trackpad stays on this Mac', 'Only a mouse crosses to other computers. The trackpad always moves the pointer here.', swc('trackpad_stays', s.trackpad_stays)),
+        ]) : '')
         + group('Cursor lock', [
           row('Lock the cursor', `Keeps the pointer on this screen even when you push past the edge. Press ${kbd(mac ? 'F14' : 'Scroll Lock')} on either keyboard to lock or unlock it.`, ''),
         ])
