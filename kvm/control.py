@@ -13,7 +13,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = 47611
-METHODS = {"status", "rename", "set_setting", "set_side", "set_layout", "reset_layout", "forget", "add_address", "pair", "pair_code", "pair_cancel",
+METHODS = {"status", "rename", "set_setting", "set_side", "set_layout", "clip_use", "clip_clear", "reset_layout", "forget", "add_address", "pair", "pair_code", "pair_cancel",
            "action", "go_home", "set_locked", "send_files", "cancel_transfer", "clear_transfers",
            "view_start", "view_stop", "view_input", "stop_sharing",
            "listen_start", "listen_stop", "mic_start", "mic_stop", "stop_sound",

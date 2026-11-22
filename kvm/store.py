@@ -33,12 +33,25 @@ DEFAULTS = {
     "display_accept": True,       # paired computers may use this screen as an extra display
     "camera_share": True,         # paired computers may use this computer's camera
     "phone_notifs": True,         # show a paired phone's notifications on this computer
+    "share_out": True,            # this keyboard and mouse may go to other computers
+    "accept_in": True,            # other computers' keyboard and mouse may come here
+    "toggle_key": "rshift",       # double-tap to turn sharing on and off ("" for none)
+    "edge_resistance": 0,         # px to push past the edge before crossing
+    "reverse_scroll": False,      # flip scrolling that comes from another computer
+    "shake_home": False,          # shake the mouse to bring the pointer back
+    "clip_mode": "instant",       # "instant" or "switch" (send what was copied when the pointer moves)
+    "clipboard_secrets": False,   # also share what password managers mark as secret
+    "clip_max_kb": 256,           # longer text isn't shared
+    "clip_recent": 20,            # recent clipboard items to list (memory only)
+    "file_keys": True,            # Ctrl+Alt+C / Ctrl+Alt+V copy and paste files between computers
 }
 SETTING_TYPES = {"clipboard": bool, "clipboard_images": bool, "swap_cmd_ctrl": bool, "cross_modifier": str,
                  "return_hotkey": str, "lock_key": str, "speed": float, "receive_dir": str, "files": bool,
                  "remote_actions": bool, "screen_share": bool, "screen_control": bool,
                  "sound_share": bool, "mic_accept": bool, "display_accept": bool, "camera_share": bool,
-                 "phone_notifs": bool}
+                 "phone_notifs": bool, "share_out": bool, "accept_in": bool, "toggle_key": str,
+                 "edge_resistance": int, "reverse_scroll": bool, "shake_home": bool, "clip_mode": str,
+                 "clipboard_secrets": bool, "clip_max_kb": int, "clip_recent": int, "file_keys": bool}
 
 
 def user_data_dir():
@@ -127,6 +140,14 @@ class Store(object):
             value = SETTING_TYPES[key](value)
         if key == "speed":
             value = min(4.0, max(0.25, value))
+        if key == "edge_resistance":
+            value = min(400, max(0, value))
+        if key == "clip_mode" and value not in ("instant", "switch"):
+            value = "instant"
+        if key == "clip_max_kb":
+            value = min(16384, max(16, value))
+        if key == "clip_recent":
+            value = min(100, max(0, value))
         with self.lock:
             self.data["settings"][key] = value
             self.save()

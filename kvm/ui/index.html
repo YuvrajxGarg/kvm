@@ -13,44 +13,77 @@
 
   <div id="app">
     <div class="titlebar pywebview-drag-region"></div>
-    <div id="scroll">
-      <header class="top pywebview-drag-region">
-        <span class="mark" style="--size:20px">kvm<span class="twin" aria-hidden="true"><i class="a"></i><i class="dot"></i><i class="b"></i></span></span>
-        <span class="faint" id="version"></span>
-        <span class="spacer"></span>
-        <button class="update-pill hidden" id="update-pill"></button>
-        <button class="btn-icon lg" id="open-settings" title="Settings"><i data-icon="gear"></i></button>
+    <nav id="side" class="pywebview-drag-region">
+      <div class="brand"><span class="mark" style="--size:20px">kvm<span class="twin" aria-hidden="true"><i class="a"></i><i class="dot"></i><i class="b"></i></span></span>
+        <span class="faint" id="version"></span></div>
+      <div id="side-peers"></div>
+      <div class="nav" id="nav">
+        <button data-page="overview"><i data-icon="home"></i><span>Overview</span><i class="dot"></i></button>
+        <button data-page="connection"><i data-icon="link"></i><span>Connection</span><i class="dot"></i></button>
+        <button data-page="phones"><i data-icon="phone"></i><span>Phones</span><i class="dot"></i></button>
+        <hr>
+        <button data-page="mouse"><i data-icon="pointer"></i><span>Mouse</span><i class="dot"></i></button>
+        <button data-page="keyboard"><i data-icon="keyboard"></i><span>Keyboard</span><i class="dot"></i></button>
+        <hr>
+        <button data-page="clipboard"><i data-icon="clip"></i><span>Clipboard</span><i class="dot"></i></button>
+        <button data-page="files"><i data-icon="folder"></i><span>Files</span><i class="dot"></i></button>
+        <button data-page="media"><i data-icon="monitor"></i><span>Screen &amp; sound</span><i class="dot"></i></button>
+        <hr>
+        <button data-page="general"><i data-icon="gear"></i><span>General</span></button>
+      </div>
+      <span class="spacer"></span>
+      <button class="update-pill hidden" id="update-pill"></button>
+    </nav>
+    <main id="scroll">
+      <header class="page-head pywebview-drag-region">
+        <div class="t"><h1 id="page-title">Overview</h1><span id="page-sub"></span></div>
+        <button class="btn-quiet hidden" id="lock-btn"><i data-icon="lock"></i><span>Cursor lock</span></button>
+        <button class="btn-quiet hidden" id="home-btn"><i data-icon="home"></i><span>Bring pointer back</span></button>
+        <span class="switch hidden" id="page-switch" title=""></span>
       </header>
 
       <div id="banners"></div>
 
-      <section class="hero card">
-        <div class="hero-head">
-          <div class="now">
-            <b id="now-title">Getting ready</b>
-            <span id="now-sub"></span>
+      <section class="page" data-page="overview">
+        <section class="hero card">
+          <div class="hero-head">
+            <div class="now">
+              <b id="now-title">Getting ready</b>
+              <span id="now-sub"></span>
+            </div>
           </div>
-          <button class="btn-quiet hidden" id="lock-btn"><i data-icon="lock"></i><span>Cursor lock</span></button>
-          <button class="btn-quiet hidden" id="home-btn"><i data-icon="home"></i><span>Bring pointer back</span></button>
-        </div>
-        <div class="desk" id="desk"></div>
-        <div class="desk-hint" id="desk-hint"></div>
+          <div class="desk" id="desk"></div>
+          <div class="desk-hint" id="desk-hint"></div>
+        </section>
+        <div class="section-head"><h3>Computers</h3></div>
+        <section id="quick" class="peers"></section>
+        <div class="section-head hidden" id="transfers-head"><h3>Files</h3><span class="spacer"></span>
+          <button class="link" id="open-received">Open received folder</button>
+          <button class="link" id="clear-transfers">Clear</button></div>
+        <section id="transfers" class="transfers"></section>
       </section>
 
-      <div class="section-head"><h3>Computers</h3><span class="spacer"></span>
-        <button class="link" id="add-address">Add by address</button></div>
-      <section id="peers" class="peers"></section>
+      <section class="page" data-page="connection">
+        <div id="pg-connection-top"></div>
+        <div class="section-head"><h3>Computers</h3><span class="spacer"></span>
+          <button class="link" id="add-address">Add by address</button></div>
+        <section id="peers" class="peers"></section>
+      </section>
 
-      <div class="section-head"><h3>Phones</h3><span class="spacer"></span>
-        <button class="link" id="pair-phone">Pair a phone</button></div>
-      <section id="phones" class="peers"></section>
+      <section class="page" data-page="phones">
+        <div class="section-head"><h3>Phones</h3><span class="spacer"></span>
+          <button class="link" id="pair-phone">Pair a phone</button></div>
+        <section id="phones" class="peers"></section>
+      </section>
 
-      <div class="section-head hidden" id="transfers-head"><h3>Files</h3><span class="spacer"></span>
-        <button class="link" id="open-received">Open received folder</button>
-        <button class="link" id="clear-transfers">Clear</button></div>
-      <section id="transfers" class="transfers"></section>
+      <section class="page" data-page="mouse"><div class="pg" id="pg-mouse"></div></section>
+      <section class="page" data-page="keyboard"><div class="pg" id="pg-keyboard"></div></section>
+      <section class="page" data-page="clipboard"><div class="pg" id="pg-clipboard"></div><div class="pg" id="pg-clips"></div></section>
+      <section class="page" data-page="files"><div class="pg" id="pg-files"></div></section>
+      <section class="page" data-page="media"><div class="pg" id="pg-media"></div></section>
+      <section class="page" data-page="general"><div class="pg" id="pg-general"></div></section>
       <div class="bottom-space"></div>
-    </div>
+    </main>
   </div>
 
   <div id="drop-veil" class="hidden"><div><i data-icon="send"></i><b>Drop on a computer to send</b></div></div>

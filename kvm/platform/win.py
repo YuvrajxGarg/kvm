@@ -36,7 +36,7 @@ MOUSEEVENTF_WHEEL, MOUSEEVENTF_HWHEEL = 0x800, 0x1000
 _BTN_FLAGS = {1: (0x2, 0x4, 0), 2: (0x8, 0x10, 0), 3: (0x20, 0x40, 0), 4: (0x80, 0x100, 1), 5: (0x80, 0x100, 2)}
 KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE = 0x1, 0x2, 0x8
 
-CF_UNICODETEXT, CF_DIB, CF_DIBV5 = 13, 8, 17
+CF_UNICODETEXT, CF_DIB, CF_DIBV5, CF_HDROP = 13, 8, 17, 15
 GMEM_MOVEABLE = 0x2
 
 
@@ -173,6 +173,10 @@ class WinBackend(Backend):
         self._clip_seq = None
         self._clip_cache = None
         self._png_fmt = user32.RegisterClipboardFormatW("PNG")
+        # Password managers put these next to what they copy, to keep it out of clipboard tools.
+        self._secret_fmts = [user32.RegisterClipboardFormatW(n) for n in
+                             ("ExcludeClipboardContentFromMonitorProcessing", "Clipboard Viewer Ignore")]
+        self._drop_effect = user32.RegisterClipboardFormatW("Preferred DropEffect")
         self._cmds = queue.Queue()
         self._hooks = []
         self._procs = []
@@ -381,12 +385,13 @@ class WinBackend(Backend):
             return self._clip_cache
         got = None
         try:
+            secret = any(f and user32.IsClipboardFormatAvailable(f) for f in self._secret_fmts)
             if user32.IsClipboardFormatAvailable(CF_UNICODETEXT):
                 h = user32.GetClipboardData(CF_UNICODETEXT)
                 p = kernel32.GlobalLock(h) if h else None
                 if p:
                     try:
-                        got = ("text", ctypes.wstring_at(p))
+                        got = ("secret" if secret else "text", ctypes.wstring_at(p))
                     finally:
                         kernel32.GlobalUnlock(h)
             if got is None and images:
@@ -426,6 +431,30 @@ class WinBackend(Backend):
             user32.CloseClipboard()
         self._clip_seq = user32.GetClipboardSequenceNumber()
         self._clip_cache = (kind, data)
+
+    def _clip_files_get(self):
+        if not _open_clipboard():
+            return []
+        try:
+            if not user32.IsClipboardFormatAvailable(CF_HDROP):
+                return []
+            raw = _global_bytes(user32.GetClipboardData(CF_HDROP))
+        finally:
+            user32.CloseClipboard()
+        return _parse_hdrop(raw) if raw else []
+
+    def _clip_files_put(self, paths):
+        if not _open_clipboard():
+            return
+        try:
+            user32.EmptyClipboard()
+            _set_global(CF_HDROP, _make_hdrop(paths))
+            if self._drop_effect:
+                _set_global(self._drop_effect, (1).to_bytes(4, "little"))  # DROPEFFECT_COPY
+        finally:
+            user32.CloseClipboard()
+        self._clip_seq = user32.GetClipboardSequenceNumber()
+        self._clip_cache = None
 
     # ---- actions -------------------------------------------------------------------------
     def action(self, what, cmd):
@@ -533,6 +562,28 @@ def _global_bytes(h):
         return ctypes.string_at(p, kernel32.GlobalSize(h))
     finally:
         kernel32.GlobalUnlock(h)
+
+
+def _make_hdrop(paths):
+    """A DROPFILES block: the header, then each path in UTF-16, then an empty one."""
+    import struct
+    body = "".join(p + "\0" for p in paths) + "\0"
+    return struct.pack("<IiiII", 20, 0, 0, 0, 1) + body.encode("utf-16-le")
+
+
+def _parse_hdrop(raw):
+    import struct
+    if len(raw) < 20:
+        return []
+    off, _, _, _, wide = struct.unpack_from("<IiiII", raw, 0)
+    data = raw[off:]
+    text = data.decode("utf-16-le", "ignore") if wide else data.decode("mbcs", "ignore")
+    out = []
+    for part in text.split("\0"):
+        if not part:
+            break
+        out.append(part)
+    return out
 
 
 def _set_global(fmt, data):

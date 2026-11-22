@@ -29,6 +29,9 @@
     mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>',
     camera: '<path d="M3.5 8a2 2 0 0 1 2-2h8.5a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5.5a2 2 0 0 1-2-2z"/><path d="m16 10.5 4.5-3v9l-4.5-3"/>',
     phone: '<rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M11 18.5h2"/>',
+    link: '<path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"/>',
+    pointer: '<path d="M5 3.5 18.5 10l-6 1.8-2.6 5.7z"/><path d="m12.6 11.9 5 5"/>',
+    clip: '<rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4V3h6v1"/><path d="M9.5 10h5M9.5 14h5"/>',
     keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M7.5 14h9"/>',
   };
   const icon = (n) => `<svg class="i" viewBox="0 0 24 24">${ICONS[n] || ''}</svg>`;
@@ -129,6 +132,8 @@
     lb.querySelector('span').textContent = a.locked ? 'Cursor locked' : 'Cursor lock';
     renderDesk(a, paired);
     renderPeers(a, peers.filter((p) => !isPhone(p)));
+    renderPeers(a, peers.filter((p) => !isPhone(p) && p.paired), '#quick');
+    renderPages(false);
     renderPhones(a, peers.filter(isPhone));
     renderTransfers(a);
     // notices from the agent (pairing done, files received, ring)
@@ -369,8 +374,8 @@
   $('#desk').addEventListener('pointerup', endDeskDrag);
   $('#desk').addEventListener('pointercancel', endDeskDrag);
 
-  function renderPeers(a, peers) {
-    const el = $('#peers');
+  function renderPeers(a, peers, sel = '#peers') {
+    const el = $(sel);
     let html;
     if (!peers.length) {
       html = `<div class="empty">No other computers found yet.<br>Open Kvm on the other computer on this Wi-Fi, or add it by its address.</div>`;
@@ -545,74 +550,222 @@
   }
 
   // ---------------------------------------------------------------- settings
-  async function openSettings() {
-    const a = st && st.agent;
-    const s = (a && a.settings) || {};
-    const login = (await api.login_state()) || {};
-    const sw = (on, key, scope) => `<span class="switch ${on ? 'on' : ''}" data-key="${key}" data-scope="${scope}"></span>`;
-    const opt = (title, sub, on, key, scope = 'share') => `<button class="opt" data-toggle="${key}" data-scope="${scope}"><span class="t"><b>${title}</b><span>${sub}</span></span>${sw(on, key, scope)}</button>`;
-    const isMac = info.platform === 'darwin';
-    const u = info.update || {};
-    const m = modal(`<div class="modal-title"><div class="logomark"><span class="mark" style="--size:15px">kvm<span class="twin"><i class="a"></i><i class="dot"></i><i class="b"></i></span></span></div><h2>Settings</h2>
-        <button class="btn-icon lg" data-act="close">${icon('x')}</button></div>
-      <div class="label">This computer</div>
-      <div class="group">
-        <div><span class="k">Name</span><input class="field" id="set-name" value="${esc(a ? a.me.name : '')}" style="width:220px"></div>
-        <div><span class="k">Address</span><span class="v">${esc(a ? (a.me.addresses || []).join(', ') : '')}${a && a.me.port !== 47610 ? ':' + a.me.port : ''}</span></div>
-        ${login.supported ? `<button class="opt" data-login="1"><span class="t"><b>Open at login</b><span>Kvm runs in the background so the other computer can reach this one.</span></span>${sw(login.on, 'login', 'login')}</button>` : ''}
-      </div>
-      <div class="label">Keyboard and mouse</div>
-      <div class="group">
-        ${opt(isMac ? 'Use ⌘ as Ctrl on a PC' : 'Use Ctrl as ⌘ on a Mac', isMac ? '⌘C, ⌘V and other shortcuts work as Ctrl shortcuts on Windows.' : 'Ctrl shortcuts work as Command shortcuts on a Mac.', s.swap_cmd_ctrl, 'swap_cmd_ctrl')}
-        <div><span class="k">Hold a key to cross<br><span class="hint">The pointer only leaves this screen while it’s held.</span></span>
-          <select id="cross-mod">${[['', 'Off'], ['ctrl', isMac ? 'Control' : 'Ctrl'], ['alt', isMac ? 'Option' : 'Alt'], ['shift', 'Shift'], ['meta', isMac ? 'Command' : 'Windows']].map(([v, l]) =>
-            `<option value="${v}" ${s.cross_modifier === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-        <div><span class="k">Pointer speed on the other computer</span><input type="range" id="speed" min="0.5" max="3" step="0.05" value="${s.speed || 1}"><span class="v" id="speed-v">${(+s.speed || 1).toFixed(2)}×</span></div>
-        <div><span class="k">Bring the pointer back</span><span class="v"><kbd>${esc(hk(s.return_hotkey))}</kbd></span></div>
-        <div><span class="k">Cursor lock (stay on this screen)</span><span class="v"><kbd>${isMac ? 'F14' : 'Scroll Lock'}</kbd></span></div>
-      </div>
-      <div class="label">Sharing</div>
-      <div class="group">
-        ${opt('Shared clipboard', 'Copy on one computer, paste on the other.', s.clipboard, 'clipboard')}
-        ${opt('Pictures too', 'Screenshots and copied images, up to 24 MB.', s.clipboard_images, 'clipboard_images')}
-        ${opt('Accept files', 'Files from paired computers are saved without asking.', s.files, 'files')}
-        <div><span class="k">Save received files to</span><span class="v" style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a ? a.receive_dir : '')}</span>
-          <button class="btn-quiet" data-act="pick-dir">Change</button></div>
-        ${opt('Ring, lock and sleep from paired computers', 'Lets a paired computer find, lock or put this one to sleep.', s.remote_actions, 'remote_actions')}
-        ${opt('Share this screen', 'Paired computers can see this screen in a Kvm window.', s.screen_share, 'screen_share')}
-        ${opt('Allow control from the viewer', 'They can also click and type on it from that window.', s.screen_control, 'screen_control')}
-        ${opt('Be a display for paired computers', 'A paired Mac can use this screen as an extra display. It opens full screen; close it to stop.', s.display_accept, 'display_accept')}
-        ${opt('Share this computer’s camera', 'Paired computers can use it, in a Kvm window or as a webcam.', s.camera_share, 'camera_share')}
-        ${opt('Show phone notifications', 'Notifications from a paired phone also show up on this computer.', s.phone_notifs, 'phone_notifs')}
-        ${opt('Share this computer’s sound', 'Paired computers can hear what plays here.', s.sound_share, 'sound_share')}
-        ${opt('Take a microphone from paired computers', isMac ? 'Their microphone plays into BlackHole, so apps here can use it.' : 'Their microphone plays into VB-CABLE, so apps here can use it.', s.mic_accept, 'mic_accept')}
-      </div>
-      <div class="label">Updates</div>
-      <div class="group">
-        <div class="ver-row"><span class="t"><b>Kvm ${esc(info.version)}</b><span id="upd-line">${esc(updLine(u))}</span></span>
-          <button class="btn-quiet" data-act="check-upd">Check now</button></div>
-        ${opt('Check for updates automatically', 'Kvm asks GitHub for new releases every few hours.', info.settings.auto_check, 'auto_check', 'app')}
-        ${opt('Install updates automatically', 'Downloads in the background and installs when Kvm quits.', info.settings.auto_install, 'auto_install', 'app')}
-      </div>
-      <p class="hint">Kvm talks only to computers you pair, over your own network, encrypted end to end. No account and no cloud. <button class="link" data-act="site">kvm.pxlvzn.in</button></p>
-      <div class="foot"><button class="btn-quiet" data-act="quit">Quit Kvm</button><span class="spacer"></span><button class="btn-primary inline" data-act="close">Done</button></div>`, 'settings');
-    m.addEventListener('click', async (e) => {
-      const t = e.target.closest('[data-toggle]');
-      if (t) {
-        const swEl = t.querySelector('.switch');
-        const on = !swEl.classList.contains('on');
-        swEl.classList.toggle('on', on);
-        if (t.dataset.scope === 'app') info.settings = await api.set_setting(t.dataset.toggle, on);
-        else await api.set_share(t.dataset.toggle, on);
-      }
-      const l = e.target.closest('[data-login]');
-      if (l) { const r = await api.set_login(!l.querySelector('.switch').classList.contains('on')); l.querySelector('.switch').classList.toggle('on', !!(r && r.on)); }
-    });
-    $('#set-name').addEventListener('change', (e) => api.rename(e.target.value));
-    $('#cross-mod').addEventListener('change', (e) => api.set_share('cross_modifier', e.target.value));
-    $('#speed').addEventListener('input', (e) => { $('#speed-v').textContent = (+e.target.value).toFixed(2) + '×'; });
-    $('#speed').addEventListener('change', (e) => api.set_share('speed', +e.target.value));
+  // ---------------------------------------------------------------- pages
+  const PAGES = {
+    overview: { title: 'Overview', sub: 'Your computers, where they sit, and what they’re doing.' },
+    connection: { title: 'Connection', sub: 'Pair computers on this network, or add one by its address.' },
+    phones: { title: 'Phones', sub: 'Notifications, clipboard and files with your Android phone.' },
+    mouse: { title: 'Mouse', sub: 'Move the pointer past the edge of the screen to use the other computer.', sw: 'share_out' },
+    keyboard: { title: 'Keyboard', sub: 'Type on whichever computer the pointer is on.' },
+    clipboard: { title: 'Clipboard', sub: 'Copy on one computer, paste on the other.', sw: 'clipboard' },
+    files: { title: 'Files', sub: 'Send files and folders, or copy and paste them between computers.', sw: 'files' },
+    media: { title: 'Screen & sound', sub: 'What other computers may see, hear and use here.' },
+    general: { title: 'General', sub: '' },
+  };
+  let page = 'overview';
+  try { page = localStorage.getItem('kvm.page') || 'overview'; } catch (e) { /* private mode */ }
+  if (!PAGES[page]) page = 'overview';
+  let loginState = null;
+
+  function setPage(name) {
+    if (!PAGES[name]) return;
+    page = name;
+    try { localStorage.setItem('kvm.page', name); } catch (e) { /* ignore */ }
+    document.querySelectorAll('#nav button[data-page]').forEach((b) => b.classList.toggle('on', b.dataset.page === name));
+    document.querySelectorAll('.page').forEach((p) => p.classList.toggle('on', p.dataset.page === name));
+    $('#page-title').textContent = PAGES[name].title;
+    $('#page-sub').textContent = PAGES[name].sub;
+    $('#scroll').scrollTop = 0;
+    if (name === 'general' && api) api.login_state().then((r) => { loginState = r || {}; renderPages(true); });
+    renderPages(true);
   }
+
+  const isMacUI = () => info.platform === 'darwin';
+  const meName = () => OS_NAME[((st && st.agent && st.agent.me) || {}).platform] || 'computer';
+  const row = (title, sub, ctl) => `<div class="row"><div class="t"><b>${title}</b>${sub ? `<span>${sub}</span>` : ''}</div>${ctl || ''}</div>`;
+  const swc = (key, on, scope = 'share') => `<span class="switch ${on ? 'on' : ''}" data-set="${key}" data-kind="bool" data-scope="${scope}"></span>`;
+  const selc = (key, val, opts, kind = 'str') => `<select data-set="${key}" data-kind="${kind}">${opts.map(([v, l]) =>
+    `<option value="${esc(v)}" ${String(val) === String(v) ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+  const segc = (key, val, opts) => `<div class="seg">${opts.map(([v, l]) => `<button data-seg="${key}" data-v="${esc(v)}" class="${val === v ? 'on' : ''}">${esc(l)}</button>`).join('')}</div>`;
+  const rangec = (key, val, min, max, step, unit) => `<div class="rng"><input type="range" data-set="${key}" data-kind="num" min="${min}" max="${max}" step="${step}" value="${val}"
+    data-unit="${unit}"><span class="v">${unit === '×' ? (+val).toFixed(2) + '×' : Math.round(val) + ' ' + unit}</span></div>`;
+  const group = (label, rows) => `${label ? `<div class="label">${label}</div>` : ''}<div class="group">${rows.join('')}</div>`;
+  const kbd = (s) => `<kbd>${esc(s)}</kbd>`;
+
+  function dirCards(left, right) {
+    const a = st.agent, me = a.me;
+    const others = (a.peers || []).filter((p) => p.paired && !isPhone(p));
+    const other = others.length === 1 ? others[0].name : 'other computers';
+    const oIcon = others.length === 1 ? (OS_ICON[others[0].platform] || 'monitor') : 'monitor';
+    const head = (from, fi, to, ti) => `<div class="dh">${icon(fi)}<b>${esc(from)}</b><i class="arrow"></i>${icon(ti)}<b>${esc(to)}</b></div>`;
+    return `<div class="dirs"><div class="dir">${head(me.name, OS_ICON[me.platform] || 'monitor', other, oIcon)}${left}</div>
+      <div class="dir">${head(other, oIcon, me.name, OS_ICON[me.platform] || 'monitor')}${right}</div></div>`;
+  }
+
+  function pageHTML(name, a) {
+    const s = a.settings || {}, mac = isMacUI();
+    const others = (a.peers || []).filter((p) => p.paired && !isPhone(p));
+    const other = others.length === 1 ? others[0].name : 'other computers';
+    if (name === 'mouse') {
+      return dirCards(
+        row(`Use this ${meName()}’s mouse and keyboard on ${esc(other)}`, 'Push the pointer past the edge.', swc('share_out', s.share_out)),
+        row(`Let ${esc(other)} use this ${meName()}`, 'Its pointer can come onto this screen.', swc('accept_in', s.accept_in)))
+        + group('Cursor lock', [
+          row('Lock the cursor', `Keeps the pointer on this screen even when you push past the edge. Press ${kbd(mac ? 'F14' : 'Scroll Lock')} on either keyboard to lock or unlock it.`, ''),
+        ])
+        + group('Coming back', [
+          row('Return shortcut', 'Brings the pointer back to this computer from anywhere.', kbd(hk(s.return_hotkey))),
+          row('Shake to bring the pointer back', 'While you use another computer, shake the mouse or trackpad left and right: the pointer comes back here.', swc('shake_home', s.shake_home)),
+        ])
+        + `<div class="label">Where the other computer is</div><div class="group"><div class="row"><div class="t"><span>Drag each screen of the other computer to where it sits on your desk, on the <a href="#" data-go="overview">Overview</a>. The pointer crosses only where the screens touch.</span></div></div></div>`
+        + group('Feel', [
+          row('Edge resistance', 'Push a little further past the edge to cross.', rangec('edge_resistance', s.edge_resistance || 0, 0, 200, 5, 'px')),
+          row('Hold a key to cross', 'The pointer only leaves this screen while it’s held.', selc('cross_modifier', s.cross_modifier || '',
+            [['', 'None'], ['ctrl', mac ? 'Control' : 'Ctrl'], ['alt', mac ? 'Option' : 'Alt'], ['shift', 'Shift'], ['meta', mac ? 'Command' : 'Windows']])),
+          row('Pointer speed on the other computer', '', rangec('speed', s.speed || 1, 0.5, 3, 0.05, '×')),
+          row(`Reverse scrolling from ${esc(other)}`, 'Flips the scroll direction of the other computer’s mouse here.', swc('reverse_scroll', s.reverse_scroll)),
+        ]);
+    }
+    if (name === 'keyboard') {
+      const keysOpts = [['', 'Off'], ['rshift', mac ? 'Right Shift ⇧' : 'Right Shift'], ['lshift', 'Left Shift'], ['rctrl', mac ? 'Right Control ⌃' : 'Right Ctrl'],
+        ['ralt', mac ? 'Right Option ⌥' : 'Right Alt'], ['rmeta', mac ? 'Right Command ⌘' : 'Right Windows']];
+      return group('Hotkey', [
+        row('Sharing hotkey', 'Double-tap to turn keyboard and mouse sharing on or off.', selc('toggle_key', s.toggle_key || '', keysOpts)),
+        row('Bring the pointer back', 'Works on either keyboard.', kbd(hk(s.return_hotkey))),
+      ]) + dirCards(
+        row(mac ? 'Shortcuts on Windows' : 'Shortcuts on a Mac', mac ? '⌘ works as Ctrl, so ⌘C copies there.' : 'Ctrl works as ⌘, so Ctrl+C copies there.', swc('swap_cmd_ctrl', s.swap_cmd_ctrl)),
+        row('Keys that only one has', 'Media, volume and brightness keys carry over. Ctrl+Alt+Del reaches Windows, even its sign-in screen.', ''));
+    }
+    if (name === 'clipboard') {
+      return group('Options', [
+        row('Sync', s.clip_mode === 'switch' ? 'What you copy goes over when the pointer moves to the other computer.' : 'As soon as you copy.',
+          segc('clip_mode', s.clip_mode || 'instant', [['switch', 'When you switch'], ['instant', 'Instantly']])),
+        row('Pictures', 'Screenshots and copied images, up to 24 MB.', swc('clipboard_images', s.clipboard_images)),
+        row('Skip passwords', 'From password managers (1Password, Bitwarden, Keychain and others).', `<span class="switch ${!s.clipboard_secrets ? 'on' : ''}" data-set="clipboard_secrets" data-kind="bool" data-invert="1"></span>`),
+        row('Largest text', 'Longer text isn’t shared.', selc('clip_max_kb', s.clip_max_kb || 256, [[64, '64 KB'], [256, '256 KB'], [1024, '1 MB'], [4096, '4 MB']], 'num')),
+        row('Recent items', 'Kept in memory only, never saved to disk.', selc('clip_recent', s.clip_recent == null ? 20 : s.clip_recent, [[0, 'Off'], [10, '10 items'], [20, '20 items'], [50, '50 items']], 'num')),
+      ]);
+    }
+    if (name === 'files') {
+      const live = others.filter((p) => p.connected);
+      return `<div class="drop card"><div>${icon('send')}<b>Drop files or folders here</b><span>Or drag them onto a computer anywhere in Kvm.</span></div>
+          <div class="acts">${live.map((p) => `<button class="btn-quiet" data-act="send" data-pid="${p.id}">Send to ${esc(p.name)}…</button>`).join('') || '<span class="faint">Connect a computer to send files.</span>'}</div></div>`
+        + group('Copy and paste files', [
+          row('Copy and paste files between computers', `Select files, press ${kbd(mac ? '⌃⌥C' : 'Ctrl+Alt+C')}, then paste on the other computer with ${kbd(mac ? '⌘V' : 'Ctrl+V')} or ${kbd(mac ? '⌃⌥V' : 'Ctrl+Alt+V')}.`, swc('file_keys', s.file_keys)),
+        ])
+        + group('Arriving files', [
+          row('Save to', esc(a.receive_dir || ''), `<button class="btn-quiet" data-act="pick-dir">Choose…</button><button class="btn-quiet" data-act="reveal" data-path="${esc(a.receive_dir || '')}">Open</button>`),
+        ]);
+    }
+    if (name === 'media') {
+      return group('Screen', [
+        row('Share this screen', 'Paired computers can see it in a Kvm window.', swc('screen_share', s.screen_share)),
+        row('Allow control from the viewer', 'They can also click and type on it from that window.', swc('screen_control', s.screen_control)),
+        row('Be a display for paired computers', 'A paired Mac can use this screen as an extra display. It opens full screen; close it to stop.', swc('display_accept', s.display_accept)),
+      ]) + group('Sound', [
+        row('Share this computer’s sound', 'Paired computers can hear what plays here.', swc('sound_share', s.sound_share)),
+        row('Take a microphone from paired computers', mac ? 'Their microphone plays into BlackHole, so apps here can use it.' : 'Their microphone plays into VB-CABLE, so apps here can use it.', swc('mic_accept', s.mic_accept)),
+      ]) + group('Camera', [
+        row('Share this computer’s camera', 'Paired computers can use it, in a Kvm window or as a webcam.', swc('camera_share', s.camera_share)),
+      ]) + group('Actions', [
+        row('Ring, lock and sleep from paired computers', 'Lets a paired computer find, lock or put this one to sleep.', swc('remote_actions', s.remote_actions)),
+        row('Show phone notifications', 'Notifications from a paired phone also show up here.', swc('phone_notifs', s.phone_notifs)),
+      ]);
+    }
+    if (name === 'general') {
+      const u = info.update || {}, lg = loginState || {};
+      return group('This computer', [
+        row('Name', 'How other computers see this one.', `<input class="field" id="set-name" value="${esc(a.me.name)}">`),
+        row('Address', 'Type it into Kvm on the other computer if it doesn’t show up.', `<span class="v sel">${esc((a.me.addresses || []).join(', '))}${a.me.port !== 47610 ? ':' + a.me.port : ''}</span>`),
+        ...(lg.supported ? [row('Open at login', 'Kvm runs in the background so the other computer can reach this one.', `<span class="switch ${lg.on ? 'on' : ''}" data-login="1"></span>`)] : []),
+      ]) + group('Updates', [
+        row(`Kvm ${esc(info.version)}`, `<span id="upd-line">${esc(updLine(u))}</span>`, '<button class="btn-quiet" data-act="check-upd">Check now</button>'),
+        row('Check for updates automatically', 'Kvm asks GitHub for new releases every few hours.', swc('auto_check', info.settings.auto_check, 'app')),
+        row('Install updates automatically', 'Downloads in the background and installs when Kvm quits.', swc('auto_install', info.settings.auto_install, 'app')),
+      ]) + `<p class="hint">Kvm talks only to computers you pair, over your own network, encrypted end to end. No account and no cloud. <button class="link" data-act="site">kvm.pxlvzn.in</button></p>
+        <div class="foot"><button class="btn-quiet" data-act="quit">Quit Kvm</button></div>`;
+    }
+    if (name === 'connection') {
+      return group('This computer', [
+        row(esc(a.me.name), 'Its address', `<span class="v sel">${esc((a.me.addresses || []).join(', '))}${a.me.port !== 47610 ? ':' + a.me.port : ''}</span>`),
+      ]);
+    }
+    return '';
+  }
+
+  function renderClips(a) {
+    const el = $('#pg-clips');
+    if (!el) return;
+    const clips = a.clips || [];
+    const html = `<div class="section-head"><h3>Recent</h3><span class="spacer"></span>${clips.length ? '<button class="link" data-act="clips-clear">Clear</button>' : ''}</div>
+      <div class="group">${clips.length ? clips.map((c, i) => `<div class="row clip"><div class="t"><b>${c.kind === 'text' ? esc(c.data.slice(0, 140)) : 'Picture'}</b>
+        <span>${c.from ? 'From ' + esc(c.from) : 'Copied here'} · ${ago(c.ts)}</span></div>${c.kind === 'text' ? `<button class="btn-quiet" data-act="clip-use" data-i="${i}">Copy</button>` : ''}</div>`).join('')
+        : '<div class="row"><div class="t"><span>Nothing yet. What’s copied on either computer shows here.</span></div></div>'}</div>`;
+    if (el.dataset.html !== html) { el.dataset.html = html; el.innerHTML = html; }
+  }
+
+  function renderPages(force) {
+    const a = st && st.agent;
+    if (!a) return;
+    const meta = PAGES[page] || {};
+    const psw = $('#page-switch');
+    psw.classList.toggle('hidden', !meta.sw);
+    if (meta.sw) { psw.classList.toggle('on', !!a.settings[meta.sw]); psw.dataset.set = meta.sw; psw.dataset.kind = 'bool'; psw.dataset.scope = 'share'; }
+    const el = $('#pg-' + page) || (page === 'connection' ? $('#pg-connection-top') : null);
+    if (el) {
+      const active = document.activeElement;
+      const editing = active && el.contains(active) && (active.tagName === 'INPUT' || active.tagName === 'SELECT');
+      const html = pageHTML(page, a);
+      if ((force || !editing) && el.dataset.html !== html) { el.dataset.html = html; el.innerHTML = html; }
+    }
+    if (page === 'clipboard') renderClips(a);
+    // nav dots: what's on right now
+    const live = (a.peers || []).some((p) => p.paired && p.connected && !isPhone(p));
+    const phone = (a.peers || []).some((p) => p.connected && isPhone(p));
+    const s = a.settings || {};
+    const on = { overview: a.mode !== 'home', connection: live, phones: phone, mouse: live && s.share_out, keyboard: live && s.share_out,
+      clipboard: live && s.clipboard, files: live && s.files, media: live && (s.screen_share || s.sound_share) };
+    document.querySelectorAll('#nav button[data-page]').forEach((b) => b.classList.toggle('live', !!on[b.dataset.page]));
+    // the computers in the sidebar
+    const side = (a.peers || []).filter((p) => p.paired && !isPhone(p)).map((p) => `<button class="sp ${a.active === p.id ? 'active' : ''}" data-go="overview">
+      ${icon(OS_ICON[p.platform] || 'monitor')}<span class="t"><b>${esc(p.name)}</b><span>${p.connected ? (a.active === p.id ? (a.mode === 'driving' ? 'Using it now' : 'Using this one') : 'Connected') : 'Not connected'}</span></span>
+      <i class="dotst ${p.connected ? 'on' : ''}"></i></button>`).join('');
+    const sp = $('#side-peers');
+    if (sp.dataset.html !== side) { sp.dataset.html = side; sp.innerHTML = side; }
+  }
+
+  // settings controls on the pages
+  async function setOne(el, value) {
+    const key = el.dataset.set;
+    if (el.dataset.scope === 'app') { info.settings = await api.set_setting(key, value); return; }
+    const r = await api.set_share(key, value);
+    if (r && st && st.agent) st.agent.settings = r;
+    renderPages(true);
+  }
+  document.addEventListener('click', async (e) => {
+    const n = e.target.closest('#nav button[data-page], [data-go]');
+    if (n) { e.preventDefault(); setPage(n.dataset.page || n.dataset.go); return; }
+    const sw = e.target.closest('.switch[data-set]');
+    if (sw) {
+      const on = !sw.classList.contains('on');
+      sw.classList.toggle('on', on);
+      await setOne(sw, sw.dataset.invert ? !on : on);
+      return;
+    }
+    const sg = e.target.closest('[data-seg]');
+    if (sg) { sg.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === sg)); await setOne({ dataset: { set: sg.dataset.seg } }, sg.dataset.v); return; }
+    const lg = e.target.closest('[data-login]');
+    if (lg) { const r = await api.set_login(!lg.classList.contains('on')); lg.classList.toggle('on', !!(r && r.on)); loginState = r || loginState; }
+  });
+  document.addEventListener('input', (e) => {
+    const r = e.target.closest('input[type=range][data-set]');
+    if (r) { const v = r.parentElement.querySelector('.v'); if (v) v.textContent = r.dataset.unit === '×' ? (+r.value).toFixed(2) + '×' : Math.round(r.value) + ' ' + r.dataset.unit; }
+  });
+  document.addEventListener('change', async (e) => {
+    const c = e.target.closest('select[data-set], input[type=range][data-set]');
+    if (c) { await setOne(c, c.dataset.kind === 'num' || c.type === 'range' ? +c.value : c.value); return; }
+    if (e.target.id === 'set-name') api.rename(e.target.value);
+  });
 
   function updLine(u) {
     if (!u) return '';
@@ -691,6 +844,9 @@
         $('#desk').dataset.key = '';
         poll();
         break;
+      case 'clip-use': if (await api.clip_use(+b.dataset.i)) toast('Copied'); break;
+      case 'clips-clear': await api.clip_clear(); poll(); break;
+      case 'addr-go': { const v = ($('#addr-input') || {}).value; if (v && v.trim()) { const r = await api.add_address(v.trim()); if (!r) toast('Couldn’t reach that address.', true); } break; }
       case 'stop-share': api.stop_sharing(); break;
       case 'extend-stop': api.extend(pid, false); break;
       case 'stop-camera': api.stop_camera(); break;
@@ -708,13 +864,12 @@
       case 'perm-ask': api.request_permissions(); break;
       case 'perm-open': api.open_privacy(b.dataset.which); break;
       case 'get-setup': api.open_url(info.site); break;
-      case 'pick-dir': await api.pick_receive_dir(); openSettings(); break;
+      case 'pick-dir': await api.pick_receive_dir(); poll(); break;
       case 'check-upd': info.update = await api.check_updates(); renderUpdate(); break;
       case 'site': api.open_url(info.site); break;
       case 'quit': api.quit(); break;
     }
   });
-  $('#open-settings').addEventListener('click', openSettings);
   $('#add-address').addEventListener('click', addByAddress);
   $('#pair-phone').addEventListener('click', pairPhone);
   $('#home-btn').addEventListener('click', () => api.go_home());
@@ -802,6 +957,7 @@
     document.body.classList.add(info.platform === 'darwin' ? 'mac' : info.platform === 'win32' ? 'win' : 'other');
     renderUpdate();
     await poll();
+    setPage((new URLSearchParams(location.search)).get('page') || page);
     setInterval(poll, 400);
     setTimeout(() => { $('#splash').classList.add('out'); $('#app').classList.add('in'); }, DEMO ? 1900 : 1700);
     setTimeout(() => $('#splash') && $('#splash').remove(), 2400);
@@ -835,7 +991,11 @@
           { id: 't1', dir: 'out', peer: 'pc', peer_name: 'Yuvraj-PC', label: 'Edit v3 - Final.mov', count: 1, total: 2.4e9, done: 1.5e9, phase: 'sending', started: 2 },
           { id: 't2', dir: 'in', peer: 'pc', peer_name: 'Yuvraj-PC', label: 'thumbnails', count: 24, total: 48e6, done: 48e6, phase: 'received', started: 1, open: '/x' },
         ] : [],
-        settings: { clipboard: true, clipboard_images: true, swap_cmd_ctrl: true, cross_modifier: '', return_hotkey: 'ctrl+alt+esc', speed: 1.25, files: true, remote_actions: true },
+        settings: { clipboard: true, clipboard_images: true, swap_cmd_ctrl: true, cross_modifier: '', return_hotkey: 'ctrl+alt+esc', speed: 1.25, files: true, remote_actions: true,
+          share_out: true, accept_in: true, toggle_key: 'rshift', edge_resistance: 0, reverse_scroll: false, shake_home: true, clip_mode: 'instant',
+          clipboard_secrets: false, clip_max_kb: 256, clip_recent: 20, file_keys: true, phone_notifs: true, screen_share: false, sound_share: false },
+        clips: [{ kind: 'text', data: 'https://kvm.pxlvzn.in/download', from: 'Yuvraj-PC', ts: Date.now() / 1000 - 40 },
+          { kind: 'image', data: '', from: null, ts: Date.now() / 1000 - 600 }, { kind: 'text', data: 'Meeting notes: ship 1.7 on Friday', from: null, ts: Date.now() / 1000 - 3600 }],
         receive_dir: '~/Downloads/Kvm', notices: [], permissions: { needs: [] },
       },
     };
@@ -846,6 +1006,9 @@
       login_state: async () => ({ supported: true, on: true }),
       pair_phone: async () => (state.agent.qr = true) && ({ svg: '<svg viewBox="0 0 10 10"><rect width="10" height="10" fill="#fff"/><rect x="1" y="1" width="3" height="3"/><rect x="6" y="1" width="3" height="3"/><rect x="1" y="6" width="3" height="3"/></svg>' }),
       set_side: async (pid, side) => { const p = state.agent.peers.find((x) => x.id === pid); if (p) p.side = side; },
+      set_share: async (k, v) => { state.agent.settings[k] = v; return state.agent.settings; },
+      clip_use: async () => true,
+      clip_clear: async () => { state.agent.clips = []; },
       set_layout: async (pid, items) => { const p = state.agent.peers.find((x) => x.id === pid); if (p) { p.layout = items; p.layout_set = true; } return true; },
     }, { get: (t, k) => t[k] || noop });
   }

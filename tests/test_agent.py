@@ -119,6 +119,108 @@ class TwoComputers(unittest.TestCase):
         st = [p for p in self.mac.status()["peers"] if p["id"] == self.pc_id][0]
         self.assertNotEqual([i["at"] for i in st["layout"]], [[-240, -1080], [1440, 100]])
 
+    def test_sharing_hotkey_resistance_and_reverse_scroll(self):
+        rs = keys.BY_NAME["rshift"]
+        for _ in range(2):  # double-tap Right Shift: sharing off
+            self.mac_be.on_local_key(rs, True)
+            self.mac_be.on_local_key(rs, False)
+        self.assertTrue(wait(lambda: self.mac._store.get("share_out") is False))
+        self.assertTrue(wait(lambda: self.mac_be.share_out is False))
+        self.assertFalse(self.mac_be.on_local_move(1439, 450, 5, 0))
+        for _ in range(2):
+            self.mac_be.on_local_key(rs, True)
+            self.mac_be.on_local_key(rs, False)
+        self.assertTrue(wait(lambda: self.mac_be.share_out is True))
+        # Shift held for typing isn't a tap.
+        self.mac_be.on_local_key(rs, True)
+        self.mac_be.on_local_key(keys.BY_NAME["a"], True)
+        self.mac_be.on_local_key(keys.BY_NAME["a"], False)
+        self.mac_be.on_local_key(rs, False)
+        self.mac_be.on_local_key(rs, True)
+        self.mac_be.on_local_key(rs, False)
+        time.sleep(0.2)
+        self.assertTrue(self.mac._store.get("share_out"))
+        # Edge resistance: 30 px of push before crossing.
+        self.mac.set_setting("edge_resistance", 30)
+        self.assertTrue(wait(lambda: self.mac_be.edge_resistance == 30))
+        self.assertFalse(self.mac_be.on_local_move(1439, 450, 10, 0))
+        self.assertFalse(self.mac_be.on_local_move(1439, 450, 10, 0))
+        self.assertTrue(self.mac_be.on_local_move(1439, 450, 10, 0))
+        self.assertTrue(wait(lambda: self.pc.status()["mode"] == "driven"))
+        # Scrolling from the Mac, reversed on the PC.
+        self.pc.set_setting("reverse_scroll", True)
+        self.assertTrue(wait(lambda: self.pc_be.reverse_scroll))
+        self.mac_be.on_local_wheel(0, 3)
+        self.assertTrue(wait(lambda: ("wheel", 0, -3) in self.pc_be.posted), self.pc_be.posted[-5:])
+
+    def test_refuse_incoming_and_shake_home(self):
+        self.pc.set_setting("accept_in", False)
+        self.assertTrue(self.mac_be.on_local_move(1439, 450, 5, 0))
+        self.assertTrue(wait(lambda: not self.mac_be.grabbed))  # the PC said no: the pointer stays
+        self.assertEqual(self.mac.status()["mode"], "home")
+        self.assertEqual(self.pc.status()["mode"], "home")
+        self.pc.set_setting("accept_in", True)
+        self.mac.set_setting("shake_home", True)
+        self.cross()
+        for dx in (40, -40, 40, -40, 40):
+            self.mac_be.on_grabbed_move(dx, 0)
+        self.assertTrue(wait(lambda: self.mac.status()["mode"] == "home"))
+
+    def test_clipboard_when_you_switch_recent_and_secrets(self):
+        self.mac._store.set("clip_mode", "switch")
+        self.mac_be.clip = ("text", "before")
+        self.assertTrue(wait(lambda: self.mac_be._clip_last is not None))
+        self.mac_be.clip = ("text", "waits for the switch")
+        self.assertTrue(wait(lambda: any(c["data"] == "waits for the switch" for c in self.mac.status()["clips"])))
+        time.sleep(0.6)
+        self.assertNotEqual(self.pc_be.clip, ("text", "waits for the switch"))
+        self.cross()
+        self.assertTrue(wait(lambda: self.pc_be.clip == ("text", "waits for the switch")))
+        self.assertEqual(self.pc.status()["clips"][0]["from"], self.mac._store.name)
+        # A password manager's copy stays here.
+        self.mac.go_home()
+        self.mac._store.set("clip_mode", "instant")
+        self.mac_be.clip = ("secret", "hunter2")
+        time.sleep(1.0)
+        self.assertNotEqual(self.pc_be.clip, ("text", "hunter2"))
+        self.assertFalse(any(c["data"] == "hunter2" for c in self.mac.status()["clips"]))
+        self.assertTrue(self.mac.clip_use(0))
+        self.assertTrue(self.mac.clip_clear())
+
+    def test_copy_and_paste_files_with_keys(self):
+        src = os.path.join(self.tmp, "pick")
+        os.makedirs(src)
+        f = os.path.join(src, "photo.jpg")
+        with open(f, "wb") as fh:
+            fh.write(os.urandom(5000))
+        self.mac_be.files_clip = [f]
+        self.cross()
+        self.mac.go_home()
+        self.assertTrue(wait(lambda: self.mac.status()["mode"] == "home"))
+        ctrl, alt, c, v = (keys.BY_NAME[k] for k in ("lctrl", "lalt", "c", "v"))
+        self.mac_be.on_local_key(ctrl, True)
+        self.mac_be.on_local_key(alt, True)
+        self.assertTrue(self.mac_be.on_local_key(c, True))   # swallowed here
+        self.assertTrue(self.mac_be.on_local_key(c, False))
+        self.mac_be.on_local_key(alt, False)
+        self.mac_be.on_local_key(ctrl, False)
+        # The PC gets the file and has it on its clipboard, ready to paste.
+        self.assertTrue(wait(lambda: self.pc_be.files_clip and os.path.basename(self.pc_be.files_clip[0]) == "photo.jpg", 10),
+                        self.pc.status()["transfers"])
+        with open(self.pc_be.files_clip[0], "rb") as a, open(f, "rb") as b:
+            self.assertEqual(a.read(), b.read())
+        # Ctrl+Alt+V while driving the PC pastes there.
+        self.mac_be.on_local_move(1439, 450, 5, 0)
+        self.assertTrue(wait(lambda: self.pc.status()["mode"] == "driven"))
+        n = len(self.pc_be.posted)
+        self.mac_be.on_local_key(ctrl, True)
+        self.mac_be.on_local_key(alt, True)
+        self.mac_be.on_local_key(v, True)
+        self.mac_be.on_local_key(v, False)
+        self.mac_be.on_local_key(alt, False)
+        self.mac_be.on_local_key(ctrl, False)
+        self.assertTrue(wait(lambda: ("key", v, True) in self.pc_be.posted[n:]))
+
     def test_wrong_code_is_refused(self):
         other = Agent(FakeBackend(), Store(os.path.join(self.tmp, "x")), port=0, discover=False).start()
         try:
