@@ -52,6 +52,9 @@
     const asCamera = qs.get('camera') === '1';
     if (asCamera) {
       document.getElementById('msg').querySelector('b').textContent = 'Waiting for the camera';
+      if (navigator.platform.toLowerCase().startsWith('win')) {
+        document.getElementById('st').title = 'Apps on this PC can use it too: pick “Kvm Camera” as the camera (Windows 11).';
+      }
     }
     if (asDisplay) {
       document.body.classList.add('display');

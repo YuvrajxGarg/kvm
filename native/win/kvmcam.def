@@ -1,0 +1,9 @@
+LIBRARY KvmCam
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE
+    DllRegisterServer PRIVATE
+    DllUnregisterServer PRIVATE
+    KvmCamStart
+    KvmCamStop
+    KvmCamWrite

@@ -80,6 +80,11 @@ class HelperProxy(Backend):
     can_inject = True
     can_audio = True  # the helper plays and records in the signed-in session
 
+    @property
+    def can_vcam(self):
+        from .vcam import available
+        return available()
+
     def __init__(self):
         self._proc = None
         self._fin = None

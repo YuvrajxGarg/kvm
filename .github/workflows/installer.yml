@@ -28,6 +28,10 @@ jobs:
       - name: Native tools (macOS)
         if: runner.os == 'macOS'
         run: native/build.sh && test -x native-build/kvm-audiotap && test -x native-build/kvm-vdisplay && test -x native-build/kvm-camera
+      - name: Native tools (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: native\win\build.cmd
       - run: pyinstaller --noconfirm --log-level WARN Kvm.spec
       - name: Smoke-test the built app
         run: |

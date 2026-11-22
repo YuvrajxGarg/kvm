@@ -194,7 +194,7 @@ class Agent(object):
                           "listeners": [{"id": pid, "name": self._peer_name(pid)} for pid in self._listeners],
                           "mic_in": [{"id": pid, "name": self._peer_name(pid)} for pid in self._mic_in],
                           "available": bool(self._backend.can_audio)},
-                "camera": {"can": bool(self._backend.can_camera),
+                "camera": {"can": bool(self._backend.can_camera), "webcam": bool(getattr(self._backend, "can_vcam", False)),
                            "watchers": [{"id": pid, "name": self._peer_name(pid)} for pid in self._cam_watchers]},
                 "extend": {"out": {pid: dict(v) for pid, v in self._extend_out.items()},
                            "in": [dict(v, id=pid, name=self._peer_name(pid)) for pid, v in self._extend_in.items()],
@@ -801,6 +801,8 @@ class Agent(object):
 
     def camera_stop(self, pid):
         self.view_stop("cam-" + pid)
+        if getattr(self._backend, "can_vcam", False):
+            self._backend.handle({"c": "vcam_stop"})
         p = self._peers.get(pid)
         if p and p.main and not p.main.closed:
             p.main.msg({"t": "cam", "on": False})
@@ -1602,6 +1604,12 @@ class Agent(object):
             return
         if t == "camframe":
             self._on_local_camframe(ev)
+            return
+        if t == "vcam":
+            if ev.get("error"):
+                self._notice(ev["error"])
+            elif ev.get("on"):
+                self._notice("“Kvm Camera” is ready: pick it as the camera in any app here.")
             return
         if t == "camera":
             if not ev.get("on") and ev.get("error"):

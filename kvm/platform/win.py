@@ -155,6 +155,11 @@ class WinBackend(Backend):
     can_capture = True
     can_inject = True
 
+    @property
+    def can_vcam(self):
+        from ..vcam import available
+        return available()
+
     def __init__(self, secure_desktop=False):
         dpi_aware()
         self._secure = secure_desktop       # running as SYSTEM: follow the input desktop

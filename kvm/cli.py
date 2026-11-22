@@ -58,6 +58,16 @@ def _selftest(out):
         res["audiotap"] = bool(tap_path())
         res["vdisplay_tool"] = bool(native_tool("kvm-vdisplay"))
         res["camera_tool"] = bool(native_tool("kvm-camera"))
+    if os.name == "nt" and getattr(sys, "frozen", False):
+        import ctypes
+
+        from .vcam import dll_path
+        try:  # it must load (mfsensorgroup is delay-loaded, so it does on Windows 10 too) and export its calls
+            d = ctypes.WinDLL(dll_path())
+            res["kvmcam_dll"] = all(hasattr(d, f) for f in ("KvmCamStart", "KvmCamStop", "KvmCamWrite", "DllGetClassObject"))
+        except Exception as e:
+            res["kvmcam_dll"] = False
+            res["kvmcam_dll_error"] = repr(e)
     tmp = tempfile.mkdtemp()
     try:
         res["loopback"] = _loopback(tmp)
