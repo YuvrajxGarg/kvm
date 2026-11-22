@@ -173,9 +173,13 @@
     const perm = a && a.permissions;
     if (perm && perm.needs && perm.needs.length) {
       out.push(`<div class="banner">${icon('alert')}<div class="t"><b>Allow Kvm to use the keyboard and mouse</b>
-        <span>macOS needs ${perm.needs.map((n) => n === 'accessibility' ? 'Accessibility' : 'Input Monitoring').join(' and ')} for Kvm in Privacy &amp; Security. Turn it on, then reopen Kvm. If Kvm is already on there, select it, remove it with −, add it again with +, then reopen Kvm.</span></div>
+        <span>macOS needs ${perm.needs.map((n) => n === 'accessibility' ? 'Accessibility' : 'Input Monitoring').join(' and ')} for Kvm in Privacy &amp; Security. Turn it on, then reopen Kvm. Without Input Monitoring the pointer still crosses, but typing doesn’t. If Kvm is already on there, select it, remove it with −, add it again with +, then reopen Kvm.</span></div>
         <button class="btn-quiet" data-act="perm-ask">Ask again</button>
         <button class="btn-quiet" data-act="perm-open" data-which="${perm.needs[0]}">Open Settings</button></div>`);
+    }
+    if (perm && perm.secure_input && !(perm.needs && perm.needs.length)) {
+      out.push(`<div class="banner">${icon('alert')}<div class="t"><b>Typing can’t reach the other computer right now</b>
+        <span>A password field or an app on this Mac has turned on Secure Input, which hides every key from Kvm. Click out of the password field, or quit the app that holds it (often a terminal with Secure Keyboard Entry, or a password manager).</span></div></div>`);
     }
     if (info.platform === 'win32' && st && st.mode === 'app') {
       out.push(`<div class="banner info">${icon('shield')}<div class="t"><b>Admin prompts and the sign-in screen</b>
